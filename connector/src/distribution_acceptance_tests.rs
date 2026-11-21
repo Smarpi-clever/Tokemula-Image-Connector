@@ -169,3 +169,72 @@ async fn synthetic_image_completes_once_while_installed_pair_switches() {
     .unwrap();
     server.abort();
 }
+
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "requires explicit signed release fixture; uses isolated paths and an in-memory credential store"]
+async fn desktop_originals_survive_keep_and_purge_uninstall() {
+    use crate::{
+        distribution::{DataPaths, Installer},
+        output::PersistentOutput,
+        settings::SettingsService,
+    };
+    use std::fs;
+
+    let release =
+        PathBuf::from(std::env::var_os("D2_AUDIT_RELEASE").expect("explicit signed fixture"));
+    let trust = PathBuf::from(std::env::var_os("D2_AUDIT_TRUST").expect("explicit public trust"));
+    assert!(release.is_absolute() && trust.is_absolute());
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([20, 40, 200, 255]))
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .unwrap();
+    let original = encoded.into_inner();
+
+    for purge in [false, true] {
+        let temporary = tempfile::tempdir().unwrap();
+        let home = temporary.path().join("用户 home space");
+        let desktop = home.join("Desktop");
+        fs::create_dir_all(&desktop).unwrap();
+        let paths = DataPaths {
+            tasks: home.join("state/tasks"),
+            cache: home.join("cache/images"),
+        };
+        let installer = Installer::new(home.join("installation"), home.join("adapters"))
+            .unwrap()
+            .with_data_paths(paths.clone())
+            .unwrap();
+        assert_eq!(
+            installer.setup(&release, &trust, None).await.unwrap()["status"],
+            "installed"
+        );
+        let output = PersistentOutput {
+            root: desktop.join("Tokemula-Images"),
+        };
+        let saved = output.save(&original, "image/png").unwrap();
+        fs::create_dir_all(&paths.cache).unwrap();
+        let expired_cache = paths.cache.join("tic-image-1-AbCdEf123456.png");
+        fs::write(&expired_cache, b"expired temporary cache").unwrap();
+        let settings_directory = home.join("settings");
+        fs::create_dir(&settings_directory).unwrap();
+        let preferences = settings_directory.join("settings.json");
+        fs::write(
+            &preferences,
+            br#"{"default_model":"sample-fast","fallback_models":[],"auto_fallback":false}"#,
+        )
+        .unwrap();
+        let service =
+            SettingsService::in_memory_for_tests(settings_directory, "http://127.0.0.1:9/v1/");
+        let result = installer.uninstall(&service, purge, purge).unwrap();
+        assert_eq!(result["status"], "uninstalled");
+        assert_eq!(
+            result["settings"],
+            if purge { "purged" } else { "retained" }
+        );
+        assert_eq!(result["user_files"], "preserved");
+        assert_eq!(fs::read(&saved).unwrap(), original);
+        assert!(saved.starts_with(fs::canonicalize(desktop.join("Tokemula-Images")).unwrap()));
+        assert!(!expired_cache.exists());
+        assert_eq!(preferences.exists(), !purge);
+    }
+}

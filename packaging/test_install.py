@@ -30,7 +30,7 @@ class InstallTests(unittest.TestCase):
     def run_script(self, *extra):
         return subprocess.run(['/bin/sh', str(SCRIPT), '--harness', 'codex', '--client', '/usr/bin/true', *extra], env=self.env, text=True, capture_output=True, timeout=20)
 
-    def installation(self, version='0.1.0-wb1.4'):
+    def installation(self, version='0.1.0-wb1.5'):
         root = self.home / '.local/share/tokemula-image-connector'; (root / 'bin').mkdir(parents=True)
         (root / 'installation.json').write_text(json.dumps({'product': 'tokemula-image-connector', 'current': version}))
         return root
@@ -72,7 +72,7 @@ class InstallTests(unittest.TestCase):
     def test_native_stdout_error_is_reported(self):
         root = self.installation()
         manager = root / 'bin/tokemula-image'
-        manager.write_text('#!/bin/sh\ncase "$1" in --version) echo "tokemula-image 0.1.0-wb1.4";; health) echo SYNTHETIC_NATIVE_HEALTH_FAILURE; exit 7;; *) exit 8;; esac\n')
+        manager.write_text('#!/bin/sh\ncase "$1" in --version) echo "tokemula-image 0.1.0-wb1.5";; health) echo SYNTHETIC_NATIVE_HEALTH_FAILURE; exit 7;; *) exit 8;; esac\n')
         manager.chmod(0o755)
         result = self.run_script()
         self.assertNotEqual(result.returncode, 0)

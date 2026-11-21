@@ -4,20 +4,20 @@
 
 ## 快速开始
 
-当前下载版 [**0.1.0-wb1.4**](https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/tag/v0.1.0-wb1.4) 支持 **macOS Apple Silicon（M 系列）**。先安装 Codex App / CLI 或 WorkBuddy AI 5.11.4，再打开终端运行对应命令。
+当前下载版 [**0.1.0-wb1.5**](https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/tag/v0.1.0-wb1.5) 支持 **macOS Apple Silicon（M 系列）**。先安装 Codex App / CLI 或 WorkBuddy AI 5.11.4，再打开终端运行对应命令。
 
 ### 1. 安装并接入客户端
 
 **Codex App / CLI**
 
 ```sh
-curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.4/install.sh | sh -s -- --harness codex
+curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.5/install.sh | sh -s -- --harness codex
 ```
 
 **WorkBuddy**
 
 ```sh
-curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.4/install.sh | sh -s -- --harness workbuddy
+curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.5/install.sh | sh -s -- --harness workbuddy
 ```
 
 命令会下载原生程序、自动校验、安装 MCP 与 Skill，并保留其他 MCP、编程 Provider 和已有设置。无需 Node、Rust 或 Python。安装脚本源码见 [`packaging/install.sh`](packaging/install.sh)。
@@ -36,13 +36,15 @@ AI 调用 `configure_tokemula` 后，打开返回的本机页面，填写自己�
 
 > 用 Tokemula 生成一张简洁插画：白色桌面上一盆仙人掌，旁边一个浅蓝色杯子，米白背景，无文字。完成后展示并提供可保存的原图。
 
-WorkBuddy 5.11.4 支持内嵌图片视图：生成或编辑后直接显示本次原图，点击“保存图片”时再选择保存位置，展示过程不自动写入图片文件。
+原图会自动保存在桌面的 **Tokemula-Images** 文件夹。WorkBuddy 在聊天正文直接显示本次原图，同时自动打开原生预览，并保留文件入口；Codex 沿用其图片展示方式并保留原图路径。
 
-需要继续编辑时，保存原图后发送：
+继续编辑时直接发送：
 
-> 用 Tokemula 编辑这张原图：`/图片的完整路径.png`。保留主体和构图，把背景改成浅桃色，在桌面左前方添加一片小绿叶。
+> 用 Tokemula 编辑刚才那张图片：保留主体和构图，把背景改成浅桃色，在桌面左前方添加一片小绿叶，只输出一张。
 
-日常省略模型、尺寸和画质即可沿用默认设置。原图路径从正常保存或附件取得；缺路径时先保存或上传。结果未知时查询原任务，避免重复提交。
+日常省略模型、尺寸和画质即可沿用默认设置。编辑结果另存新文件，不覆盖原图。图片长期保留，重启、升级和卸载都不会删除；回看旧聊天时，保持原文件的位置和名称。编辑其他已有图片时，可上传原图或提供完整路径。
+
+请求结果未知时，保留原引用，不重复提交。文件被移动或删除时报告路径失效，不拿旧图替代。
 
 ## 客户端与配置
 
@@ -80,7 +82,7 @@ WorkBuddy 的 `mcp.json`：
 
 - 生成、原图编辑、多参考图及模型声明的高级参数。
 - 模型目录、默认/备用模型、按操作保存的尺寸与画质偏好。
-- 同步任务、目录开放的异步/批量能力及原任务引用恢复；当前 Mac 实际用图验收覆盖同步生成和编辑。
+- 同步生成与编辑、目录开放的异步/批量能力及原任务引用恢复；可用模式以当前 Key 的模型目录为准。
 - 八个工具的参数由 MCP 工具发现提供，费用和额度在 [Tokemula 网站](https://tokemula.com/)查看。
 
 [设置与日常管理](docs/MANAGEMENT.md) · [安装、更新、卸载与恢复](docs/DISTRIBUTION.md) · [HTTP 与图片交付](docs/HTTP-DEVELOPMENT-CONTRACT.md) · [批量任务](docs/IMAGE-BATCH-CONTRACT.md)
@@ -90,7 +92,7 @@ WorkBuddy 的 `mcp.json`：
 - **App 放在其他位置？** 安装命令支持 `--client` 和 `--workbuddy-app`，用法见[安装说明](docs/DISTRIBUTION.md#快速安装mac-m-系列)。
 - **安装完成，客户端还没连接？** 重启客户端并新建任务，检查该 MCP 已启用；WorkBuddy 先完成“信任”。
 - **macOS 提示无法验证开发者？** 在系统设置的“隐私与安全性”中正常确认对应程序，见[Mac 教程](https://docs.tokemula.com/image-connector/)。当前包使用产品测试签名，Apple Developer ID 与公证尚待完成。
-- **已有安装？** 同版会复用；从 wb1.3 升级的保设置步骤见[版本管理](docs/DISTRIBUTION.md#从-wb13-升级)。
+- **已有安装？** 同版会复用；旧版的保设置升级步骤见[版本管理](docs/DISTRIBUTION.md#升级并保留设置)。
 
 ## 开发
 

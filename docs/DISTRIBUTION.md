@@ -2,18 +2,18 @@
 
 ## 快速安装（Mac M 系列）
 
-在终端选择一个客户端运行。安装器固定下载 [GitHub Release `v0.1.0-wb1.4`](https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/tag/v0.1.0-wb1.4) 的原生程序，先校验归档，再调用现有 `setup` 验签安装，最后注册 MCP 与 Skill。
+在终端选择一个客户端运行。安装器固定下载 [GitHub Release `v0.1.0-wb1.5`](https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/tag/v0.1.0-wb1.5) 的原生程序，先校验归档，再调用现有 `setup` 验签安装，最后注册 MCP 与 Skill。
 
 Codex App / CLI：
 
 ```sh
-curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.4/install.sh | sh -s -- --harness codex
+curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.5/install.sh | sh -s -- --harness codex
 ```
 
 WorkBuddy AI 5.11.4：
 
 ```sh
-curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.4/install.sh | sh -s -- --harness workbuddy
+curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.5/install.sh | sh -s -- --harness workbuddy
 ```
 
 安装脚本源码见 [`packaging/install.sh`](../packaging/install.sh)。它只使用 macOS 自带工具，不需要 Node、Rust 或 Python，不更改 PATH 或编程 Provider。已有同版安装会复用；其他版本或待恢复安装会给出明确提示，继续使用原版本管理入口。
@@ -22,15 +22,17 @@ Codex 自动查找 PATH 中的 CLI，再查标准应用目录内已支持的 App
 
 命令成功表示程序与接入已注册，WorkBuddy 可能仍为 `awaiting_confirmation`。重新打开客户端，WorkBuddy 首次接入先完成该连接器的原生信任；再新建任务，发送“配置 Tokemula 图片服务”，通过 `configure_tokemula` 返回的本机入口填写 Key 和默认设置。系统及客户端信任由用户在原生窗口确认。安装脚本不读取 Key、不打开配置页面，也不生成或编辑图片。
 
-## 从 wb1.3 升级
+## 升级并保留设置
 
-本版更换了程序包验证公钥。先用旧版管理器默认卸载，Key、默认模型、尺寸和画质会保留：
+<a id="从-wb13-升级"></a>
+
+从先前 Mac 测试版升级时，先用旧版管理器默认卸载，Key、默认模型、尺寸和画质会保留：
 
 ```sh
 "$HOME/.local/share/tokemula-image-connector/bin/tokemula-image" uninstall
 ```
 
-然后运行上方对应客户端的新安装命令。两个客户端都使用时，分别运行 Codex 和 WorkBuddy 的安装命令；WorkBuddy 按提示重新确认连接器信任。原图和其他客户端配置保持原位。
+然后运行上方对应客户端的新安装命令。两个客户端都使用时，分别运行 Codex 和 WorkBuddy 的安装命令；WorkBuddy 按提示重新确认连接器信任。桌面 Tokemula-Images 中的原图和其他客户端配置保持原位。
 
 ## 从压缩包手动安装
 
@@ -73,7 +75,7 @@ App 配置可使用 `configure --browser` 或 Harness 的 `configure_tokemula` �
 /absolute/installed/root/bin/tokemula-image uninstall --purge --confirm
 ```
 
-默认保留系统 Key、默认/备用模型及任务恢复引用；彻底清理是明确选择。先移除仍归本产品的外部接入，再删自身程序与所需归属资料。客户端缺失、用户改动冲突或移除失败时保留管理/恢复入口；不删除用户另存图片、其他客户端或用户新增文件。
+默认保留系统 Key、默认/备用模型及任务恢复引用；彻底清理是明确选择。先移除仍归本产品的外部接入，再删自身程序与所需归属资料。客户端缺失、用户改动冲突或移除失败时保留管理/恢复入口；桌面 Tokemula-Images 中的原图、用户另存图片、其他客户端和用户新增文件均保留，使用 purge 也不删除图片。
 
 
 程序文件清理受阻时，结果为 `uninstall_incomplete` 并给出 `resume_command`；版本目录外的独立控制程序会保留。排除报告的具体文件故障后，复制返回的命令继续：

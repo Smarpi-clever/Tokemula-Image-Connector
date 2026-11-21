@@ -30,15 +30,23 @@ B1 的 `Catalog`、`SelectionRequest`、`FeeReceipt` 继续供离线调用者直
 
 成功响应沿现有 Images 格式：`data` 数组，每项是 `b64_json` 或 `url`（二选一），可带 `expires_at`（Unix 秒，未给则远程期限未知）。HTTP 头 `X-Client-Request-ID` 是关联引用。可选顶层 `model` 表示服务端提供的客户可见实际模型，不自行用选择值冒充该信息。
 
-返回 MCP image 与结构化元信息（selected_model、effective_model/source、状态与request_ref），图片格式由实际内容验证。URL 用独立、无 Authorization 的 HTTP client 下载，下载重定向同样不携带 API 凭据；URL 不写入工具诊断。小图保持原始inline。按SDK官方响应类型序列化后，含request ID、所有图片及元信息的消息预算为8MiB（低于默认16MiB传输上限）；超出时按最大图片逐个改为256像素内的PNG预览，完整原图另存至当前用户私有缓存，直到整条响应符合预算。文本和 `local_files[].inline_representation="preview"` 明确区分预览/原图；每条local_files含image_index、绝对path、原图mime_type及expires_at。原图保留24小时，启动或下次工具操作清理本产品命名的过期普通文件；不删输入、无关文件或链接目标，不运行后台清理。Unix目录0700、文件0600；Windows使用当前用户LocalAppData缓存的继承访问控制。输入20MiB和像素支持范围保持不变。远程到期时间单列，未知为null；本地缓存期限不推定远程URL期限。
+返回 MCP image 与结构化元信息（selected_model、effective_model/source、状态与request_ref），图片格式由实际内容验证。URL 用独立、无 Authorization 的 HTTP client 下载，下载重定向同样不携带 API 凭据；URL 不写入工具诊断。远端到期时间单列，未知为 null，不从它推导本地文件期限。
 
-### MCP Apps 内嵌图片视图
+### macOS 产品默认交付：桌面持久原图
 
-客户端协商 `capabilities.extensions["io.modelcontextprotocol/ui"].mimeTypes` 包含 `text/html;profile=mcp-app` 时，生成、编辑、单异步查询和批量查询四个工具通过 `_meta.ui.resourceUri` 关联固定资源 `ui://tokemula/image-viewer`。它是无外部依赖的静态 HTML，图片直接来自本次 `ui/notifications/tool-result`，不经语言模型转抄、不先写图片文件。八个工具名、参数、默认选择、上游调用和错误/恢复引用保持。
+独立 MCP 的 `for_current_user()` 产品入口把每张已取得的完整原图保存到当前用户 `Desktop/Tokemula-Images`，解析桌面真实父路径以跟随用户符号链接/iCloud 桌面；不修改桌面或已有目录权限。生成、编辑及批量提交在读取操作设置/发出收费 POST 前创建一次写入探针，无法写入时返回 `image_storage_unavailable`、`not_submitted`，不改目录或重投。保存后才返回路径；写入结果失败返回 `image_storage_failed`、`accepted` 并保留原请求/任务引用及已保存的本次文件路径。
 
-符合 8 MiB 消息预算的结果继续返回原始 `ImageContent`。超预算时，协议 image 块明确标为预览，本次原图只暂存进程内存；结果 `_meta["tokemula/inlineImages"]` 按 `image_index` 给出独有资源 URI、原始 MIME、字节数及分块数。视图通过同一 Server 的标准 `resources/read` 顺序读取每块最多 3 MiB 的原始字节，再在浏览器内存显示完整图片；每条资源响应也低于 8 MiB。此路径不调用图片文件缓存。内存资源从结果准备起保留 10 分钟，进程退出即结束；过期只报告状态，不重发请求。新结果、失败、无图或取消时清除当前视图，迟到的旧资源响应不会替换本次结果。
+图片字节、格式和尺寸保持原样。文件名使用独立随机名称，编辑和多图不覆盖输入或先前产物。`local_files` 按本次图片顺序返回 `image_index`、绝对 `path`、`mime_type`、`width`、`height`，并使用 `persistent=true`、`retention="user_managed"`、`expires_at=null` 表示无自动过期；不把旧临时 `expires_at` 语义改成虚假远期时间。`content.text` 同时给出每张完整绝对路径，使模型直接消费，`inline_representation` 区分协议图块是 `original` 或 `preview`。
 
-“保存图片”只在用户点击时，以原始 MIME 与原始字节调用标准 `ui/download-file` 的内联 `EmbeddedResource`，交给宿主选择保存位置。宿主未声明相应资源读取或下载能力时，视图显示缺少的入口。未协商 MCP Apps 的客户端沿用上段的原始内联图/大图预览与 24 小时文件缓存合同。
+消息预算仍为按 SDK 官方类型序列化的 8 MiB（含 request ID、全部图片和元信息）。小图保持原 ImageContent；超预算逐个换为 256 像素内 PNG 预览，完整原图已经保存，仍展示同一次持久路径，不再另写缓存或创建 10 分钟内存资源。此产品路径不声明 MCP Apps 工具 UI，WorkBuddy 由配套 Skill 发现并调用原生 `present_files`，`files` 使用本次路径，`cwd` 为任务工作目录；首图自动打开，聊天保留同一文件入口。Codex沿原生图片交付方式使用原图及其绝对路径。
+
+桌面图是用户产物，重启、升级、缓存清理以及卸载（包括 purge）均不删除。用户移动、改名或删除文件后，旧路径失效，展示/编辑应报告真实路径状态，不重新生成或替换为其他图片。
+
+### 原有构造与非 macOS 兼容交付
+
+`ImageMcp::new(client)`、`with_settings`、显式目录/离线构造保持原条件，不自动增加桌面写入前置。非 macOS 产品也保留原交付方式：小图原始内联；大图按同一 8 MiB 预算变成 PNG 预览，并把完整图存入当前用户私有 24 小时缓存。`local_files` 的绝对路径、原 MIME、临时 `expires_at` 和 `inline_representation="preview"` 保持原义。缓存启动或下次工具操作仅清理本产品过期普通文件，不删输入、用户桌面产物或链接目标；Unix 缓存目录 0700、文件 0600。输入 20 MiB 与像素限制保持。
+
+未启用桌面交付的旧构造，仍可按客户端 `extensions["io.modelcontextprotocol/ui"].mimeTypes` 协商使用既有 `ui://tokemula/image-viewer`：小图原始 ImageContent，大图原字节在当前进程内保留 10 分钟并经 `resources/read` 分块读取，用户点击后调用 `ui/download-file`。该兼容能力不作为 macOS/WorkBuddy 默认交付前置。
 
 ## 错误及提交状态
 

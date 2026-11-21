@@ -107,6 +107,7 @@ async fn check_protocol_lifecycle(
     assert!(tools.next_cursor.is_none());
     for tool in &tools.tools {
         let has_ui = ui
+            && !cfg!(target_os = "macos")
             && matches!(
                 tool.name.as_ref(),
                 "generate_image" | "edit_image" | "get_image_task" | "get_image_batch"

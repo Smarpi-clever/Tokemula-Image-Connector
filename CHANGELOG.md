@@ -1,8 +1,15 @@
 # 更新记录
 
+## [0.1.0-wb1.5] - 2026-11-22
+
+- Mac 默认把完整原图保存到桌面 Tokemula-Images，编辑另存、不覆盖旧文件，多图按返回顺序交付。
+- WorkBuddy 通过配套 Skill 在聊天正文内嵌本次原图，并自动打开原生预览、保留文件入口；正常重启后可以回看同一文件。
+- 桌面图片无自动过期，缓存清理、升级与卸载（含 purge）均保留；移动或删除后明确报告路径失效。
+- 保留 Codex 原有展示、八工具、Key 和默认图片设置；结果未知或展示失败时不重新生成。
+
 ## [0.1.0-wb1.4] - 2026-11-22
 
-- 增加标准 MCP Apps 图片视图，WorkBuddy 可直接展示本次生成和编辑原图，用户点击后再保存。
+- 增加标准 MCP Apps 图片视图；后续真实 WorkBuddy 聊天未能自动显示，wb1.5 改用持久原图与原生展示。
 - 大图通过内存资源分块显示完整原图，保持原始字节、格式和尺寸；未协商 MCP Apps 的客户端沿用原交付方式。
 - 修正失败或无图时的视图清空与高度回缩，保留八工具、默认设置和原请求恢复方式。
 - 更新 Mac 测试包验证公钥；旧版升级保留 Key 和图片偏好，按安装指南重新接入客户端。
@@ -17,5 +24,6 @@
 - 提供图片生成、原图编辑、模型查询及任务与批量接口。同步生成、编辑、显示和保存已完成真实使用验收。
 - 支持保留设置的卸载、指定客户端移除和已安装版本恢复。
 
+[0.1.0-wb1.5]: https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/tag/v0.1.0-wb1.5
 [0.1.0-wb1.4]: https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/tag/v0.1.0-wb1.4
 [0.1.0-wb1.3]: https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/tag/v0.1.0-wb1.3

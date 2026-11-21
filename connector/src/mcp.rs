@@ -4,7 +4,7 @@ use crate::{
     configuration::SessionManager,
     http::{BatchProgress, CallError, ImageClient, RequestProgress, Submission},
     image_view::{self, ImageView},
-    output::OutputCache,
+    output::{OutputCache, PersistentOutput},
     settings::SettingsService,
     tasks::TaskStore,
 };
@@ -174,6 +174,7 @@ pub struct ImageMcp {
     settings: Option<SettingsService>,
     sessions: Option<SessionManager>,
     image_view: ImageView,
+    persistent_output: Option<PersistentOutput>,
 }
 
 impl ImageMcp {
@@ -199,7 +200,18 @@ impl ImageMcp {
             code: "configuration_invalid",
             message: "无法初始化图片连接配置。",
         })?;
-        Ok(Self::with_settings(client, settings))
+        let server = Self::with_settings(client, settings);
+        #[cfg(target_os = "macos")]
+        let server = Self {
+            persistent_output: Some(PersistentOutput::for_current_user().map_err(|error| {
+                crate::settings::SettingsError {
+                    code: error.code,
+                    message: error.message,
+                }
+            })?),
+            ..server
+        };
+        Ok(server)
     }
 
     async fn operation_client(&self) -> Result<ImageClient, CallError> {
@@ -244,9 +256,23 @@ impl ImageMcp {
             settings: None,
             sessions: None,
             image_view: ImageView::default(),
+            persistent_output: None,
         };
         server.cleanup_outputs();
         server
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_persistent_output_for_tests(mut self, root: std::path::PathBuf) -> Self {
+        self.persistent_output = Some(PersistentOutput { root });
+        self
+    }
+
+    fn preflight_output(&self) -> Result<(), CallError> {
+        if let Some(output) = &self.persistent_output {
+            output.preflight()?;
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -411,6 +437,13 @@ impl ImageMcp {
         let Ok(input) = serde_json::from_value::<BatchSubmitInput>(arguments) else {
             return invalid_parameters();
         };
+        if let Err(error) = self.preflight_output() {
+            return failure(self.client.batch_context_error(
+                &input,
+                error,
+                &BatchProgress::submission(),
+            ));
+        }
         let progress = BatchProgress::submission();
         let client = match self.operation_client().await {
             Ok(client) => client,
@@ -522,6 +555,9 @@ impl ImageMcp {
         let Ok(input) = serde_json::from_value::<GenerateInput>(arguments) else {
             return invalid_parameters();
         };
+        if let Err(error) = self.preflight_output() {
+            return failure(error);
+        }
         self.cleanup_outputs();
         let client = match self.operation_client().await {
             Ok(client) => client,
@@ -544,6 +580,9 @@ impl ImageMcp {
         let Ok(input) = serde_json::from_value::<EditInput>(arguments) else {
             return invalid_parameters();
         };
+        if let Err(error) = self.preflight_output() {
+            return failure(error);
+        }
         let request = GenerateInput {
             prompt: input.prompt.clone(),
             model: input.model.clone(),
@@ -588,7 +627,8 @@ impl ServerHandler for ImageMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
         let mut tools = Self::tool_router().list_all();
-        if image_view::supported(context.client_capabilities()) {
+        if self.persistent_output.is_none() && image_view::supported(context.client_capabilities())
+        {
             for tool in &mut tools {
                 if matches!(
                     tool.name.as_ref(),
@@ -701,6 +741,22 @@ fn bounded(result: CallToolResult, id: &RequestId, submission: Submission) -> Ca
     }
 }
 
+fn image_delivery_failure(error: CallError, metadata: &Value) -> CallToolResult {
+    let mut result = failure(with_output_reference(error, metadata));
+    result.structured_content.as_mut().expect("error metadata")["local_files"] =
+        metadata["local_files"].clone();
+    for file in metadata["local_files"]
+        .as_array()
+        .expect("saved image paths")
+    {
+        result.content.push(ContentBlock::text(format!(
+            "已保存的本次原图：{}",
+            file["path"].as_str().expect("saved path")
+        )));
+    }
+    result
+}
+
 impl ImageMcp {
     fn render(
         &self,
@@ -722,12 +778,46 @@ impl ImageMcp {
                 Submission::Accepted,
             );
         }
+        let inline_ui = inline_ui && self.persistent_output.is_none();
+        let mut desktop_paths: Vec<Value> = Vec::new();
+        if let Some(destination) = &self.persistent_output {
+            for (index, (bytes, mime)) in output.images.iter().enumerate() {
+                let path = match destination.save(bytes, mime) {
+                    Ok(path) => path,
+                    Err(_) => {
+                        output.metadata["local_files"] = serde_json::json!(desktop_paths);
+                        let failed = image_delivery_failure(
+                            CallError::new(
+                                "image_storage_failed",
+                                "图片已返回，但无法保存桌面原图；请求不会重发。",
+                                Submission::Accepted,
+                            ),
+                            &output.metadata,
+                        );
+                        return bounded(failed, id, Submission::Accepted);
+                    }
+                };
+                let dimensions = &output.metadata["image_dimensions"][index];
+                desktop_paths.push(serde_json::json!({
+                    "image_index": index,
+                    "path": path,
+                    "mime_type": mime,
+                    "width": dimensions["width"],
+                    "height": dimensions["height"],
+                    "persistent": true,
+                    "retention": "user_managed",
+                    "expires_at": null,
+                    "inline_representation": "original"
+                }));
+            }
+            output.metadata["local_files"] = serde_json::json!(desktop_paths);
+        }
         let caption = if output.metadata["batch_id"].is_string() {
             "图片已返回；任务状态见结果信息。"
         } else {
             "图片已返回；模型和结果状态见结果信息。"
         };
-        let caption = if output.metadata["request_parameters"].is_object() {
+        let mut caption = if output.metadata["request_parameters"].is_object() {
             format!(
                 "{caption}\n{}",
                 serde_json::json!({
@@ -743,6 +833,13 @@ impl ImageMcp {
         } else {
             caption.to_owned()
         };
+        for file in &desktop_paths {
+            caption.push_str(&format!(
+                "\n第 {} 张完整原图：{}（用户产物，无自动过期）。",
+                file["image_index"].as_u64().expect("image index") + 1,
+                file["path"].as_str().expect("saved path")
+            ));
+        }
         let content = output
             .images
             .iter()
@@ -763,6 +860,35 @@ impl ImageMcp {
             else {
                 return bounded(result, id, Submission::Unknown);
             };
+            if self.persistent_output.is_some() {
+                let mut preview = Cursor::new(Vec::new());
+                let decoded = image::load_from_memory(&output.images[index].0)
+                    .expect("HTTP boundary validated image bytes");
+                if decoded
+                    .thumbnail(256, 256)
+                    .write_to(&mut preview, ImageFormat::Png)
+                    .is_err()
+                {
+                    return image_delivery_failure(
+                        CallError::new(
+                            "preview_failed",
+                            "桌面原图已保存，但协议预览编码失败。",
+                            Submission::Accepted,
+                        ),
+                        result.structured_content.as_ref().expect("image metadata"),
+                    );
+                }
+                result.content[index] =
+                    ContentBlock::image(STANDARD.encode(preview.into_inner()), "image/png");
+                result.structured_content.as_mut().expect("image metadata")["local_files"][index]
+                    ["inline_representation"] = serde_json::json!("preview");
+                result.content.push(ContentBlock::text(format!(
+                    "第 {} 张协议图块是预览；请展示上方本次桌面原图路径。",
+                    index + 1
+                )));
+                previews[index] = true;
+                continue;
+            }
             if inline_ui {
                 let (bytes, mime) = (&output.images[index].0, output.images[index].1);
                 let mut preview = Cursor::new(Vec::new());
@@ -879,3 +1005,7 @@ fn invalid_parameters() -> CallToolResult {
 #[cfg(test)]
 #[path = "image_view_tests.rs"]
 mod image_view_tests;
+
+#[cfg(test)]
+#[path = "persistent_output_tests.rs"]
+mod persistent_output_tests;

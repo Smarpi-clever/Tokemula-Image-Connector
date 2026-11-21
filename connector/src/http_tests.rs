@@ -1251,3 +1251,53 @@ mod preferences;
 
 #[path = "configuration_mcp_tests.rs"]
 mod configuration_mcp;
+
+#[tokio::test]
+async fn persistent_output_preflight_blocks_generation_edit_and_batch_before_any_post() {
+    let fixture = Fixture::new().await;
+    let directory = tempfile::tempdir().unwrap();
+    let blocked = directory.path().join("not-a-directory");
+    std::fs::write(&blocked, b"keep").unwrap();
+    let server = ImageMcp::with_directories(
+        fixture.client(Duration::from_secs(2)),
+        directory.path().join("cache"),
+        directory.path().join("tasks"),
+    )
+    .with_persistent_output_for_tests(blocked);
+    let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+    let task = tokio::spawn(async move {
+        server
+            .serve(server_io)
+            .await
+            .unwrap()
+            .waiting()
+            .await
+            .unwrap();
+    });
+    let client = ClientConfig::default()
+        .with_protocol_version(ProtocolVersion::V_2025_11_25)
+        .serve(client_io)
+        .await
+        .unwrap();
+    for (tool, args) in [
+        ("generate_image", json!({"prompt":"synthetic"})),
+        (
+            "edit_image",
+            json!({"prompt":"synthetic","image_path":"/synthetic/input.png"}),
+        ),
+        (
+            "submit_image_batch",
+            json!({"items":[{"custom_id":"one","prompt":"synthetic"}]}),
+        ),
+    ] {
+        let result = call(&client, tool, args).await;
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(metadata(&result)["code"], "image_storage_unavailable");
+        assert_eq!(metadata(&result)["submission"], "not_submitted");
+    }
+    assert_eq!(fixture.count(), 0);
+    assert_eq!(fixture.state.gets.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.state.fees.load(Ordering::SeqCst), 0);
+    client.cancel().await.unwrap();
+    task.await.unwrap();
+}
