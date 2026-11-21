@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>连接 Tokemula</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main id="connection" aria-labelledby="title">
+    <header>
+      <div class="brand"><span class="brand-mark" aria-hidden="true">T</span><span>Tokemula</span></div>
+      <h1 id="title">连接图片服务</h1>
+      <p id="intro">选择默认模型、尺寸和画质，之后直接描述图片。</p>
+    </header>
+
+    <p id="notice" class="notice" role="status" aria-live="polite" hidden></p>
+    <p id="error" class="notice error" role="alert" tabindex="-1" hidden></p>
+
+    <form id="configure-form" novalidate>
+      <section class="key-section" aria-labelledby="key-label">
+        <label id="key-label" for="api-key">API Key</label>
+        <input id="api-key" name="api-key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="粘贴 Tokemula API Key">
+        <div class="key-actions"><span id="key-state">仅验证权限和模型，不生成图片。</span><button id="validate" class="secondary" type="button">验证 Key</button></div>
+      </section>
+
+      <fieldset id="models" disabled>
+        <div class="field">
+          <label for="default-model">默认模型</label>
+          <select id="default-model" required><option value="">验证后选择模型</option></select>
+        </div>
+        <section class="image-preferences" aria-labelledby="preferences-title">
+          <h2 id="preferences-title">出图偏好</h2>
+          <div class="field-grid">
+            <div><label for="image-operation">操作</label><select id="image-operation"><option value="generation">生成图片</option><option value="edit">编辑图片</option></select></div>
+            <div><label for="image-mode">执行方式</label><select id="image-mode"><option value="sync">同步</option><option value="single_async">单任务异步</option><option value="batch">批量任务</option></select></div>
+          </div>
+          <p id="capability-state" class="help" role="status"></p>
+          <div class="field-grid">
+            <div><label for="image-size">尺寸</label><select id="image-size"><option value="">自动／模型默认</option></select></div>
+            <div><label for="image-quality">画质</label><select id="image-quality"><option value="">自动／模型默认</option></select></div>
+          </div>
+          <div id="custom-size" class="custom-size" hidden>
+            <div class="field-grid">
+              <div><label for="image-width">宽度（像素）</label><input id="image-width" type="number" inputmode="numeric" min="1"></div>
+              <div><label for="image-height">高度（像素）</label><input id="image-height" type="number" inputmode="numeric" min="1"></div>
+            </div>
+            <p id="size-rules" class="help"></p>
+          </div>
+          <p id="parameter-error" class="parameter-error" role="alert" hidden></p>
+          <button id="clear-incompatible" class="secondary" type="button" hidden>清除不兼容偏好</button>
+          <p id="image-complexity" class="help complexity"></p>
+        </section>
+        <div class="field">
+          <label for="fallback-model">备用顺序</label>
+          <p class="help" id="fallback-help">首选不适用时，按此顺序查找可用模型。</p>
+          <div class="add-model"><select id="fallback-model" aria-describedby="fallback-help"><option value="">选择备用模型</option></select><button id="add-fallback" class="secondary" type="button" disabled>添加</button></div>
+          <ol id="fallbacks" class="fallbacks" aria-label="备用模型顺序"></ol>
+          <p id="empty-fallbacks" class="empty">尚未添加备用模型</p>
+        </div>
+        <label class="toggle" for="auto-fallback"><input id="auto-fallback" type="checkbox"><span>自动使用备用模型</span></label>
+      </fieldset>
+
+      <footer><button id="cancel" class="quiet" type="button">取消</button><button id="save" class="primary" type="submit" disabled>保存设置</button></footer>
+    </form>
+
+    <section id="finished" class="finished" tabindex="-1" aria-labelledby="finished-title" hidden>
+      <span class="result-mark" aria-hidden="true">✓</span>
+      <h2 id="finished-title"></h2>
+      <p id="finished-message"></p>
+    </section>
+  </main>
+</body>
+</html>

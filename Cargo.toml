@@ -1,0 +1,8 @@
+[workspace]
+members = ["connector"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.100"
+license = "Apache-2.0"

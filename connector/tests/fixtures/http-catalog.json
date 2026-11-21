@@ -1,0 +1,287 @@
+{
+  "can_submit": true,
+  "schema_version": "1",
+  "models": [
+    {
+      "id": "sample-fast",
+      "display_name": "Synthetic Fast",
+      "preference_rank": 1,
+      "availability": "configured",
+      "capabilities": [
+        {
+          "operation": "generation",
+          "mode": "sync",
+          "parameters": {
+            "max_images": 2,
+            "sizes": [
+              "1024x1024"
+            ],
+            "qualities": [
+              "standard"
+            ]
+          },
+          "input_limits": {
+            "max_images": 0,
+            "max_image_bytes": 0,
+            "mime_types": [],
+            "max_request_bytes": 268435456
+          },
+          "result_formats": [
+            "b64_json",
+            "url"
+          ],
+          "cancel_supported": false
+        }
+      ],
+      "pricing": {
+        "status": "available",
+        "rates": [
+          {
+            "operation": "generation",
+            "mode": "sync",
+            "unit": "token",
+            "quantity_basis": "usage_tokens",
+            "conditions": {
+              "context_min_tokens": 0,
+              "context_max_tokens": 128000
+            },
+            "components": [
+              {
+                "kind": "input",
+                "unit_price": {
+                  "ledger_amount": "0.00000001",
+                  "ledger_unit": "CNY"
+                }
+              },
+              {
+                "kind": "image_input",
+                "unit_price": {
+                  "ledger_amount": "0.00000001",
+                  "ledger_unit": "CNY"
+                }
+              },
+              {
+                "kind": "output",
+                "unit_price": {
+                  "ledger_amount": "0.00000001",
+                  "ledger_unit": "CNY"
+                }
+              },
+              {
+                "kind": "image_output",
+                "unit_price": {
+                  "ledger_amount": "0.00000001",
+                  "ledger_unit": "CNY"
+                }
+              },
+              {
+                "kind": "cache_write",
+                "unit_price": {
+                  "ledger_amount": "0.00000001",
+                  "ledger_unit": "CNY"
+                }
+              },
+              {
+                "kind": "cache_read",
+                "unit_price": {
+                  "ledger_amount": "0.00000001",
+                  "ledger_unit": "CNY"
+                }
+              },
+              {
+                "kind": "image_cache_read",
+                "unit_price": {
+                  "ledger_amount": "0.00000001",
+                  "ledger_unit": "CNY"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "sample-26",
+      "display_name": "Synthetic Image Family",
+      "family": "image-2.6",
+      "preference_rank": 50,
+      "availability": "configured",
+      "capabilities": [
+        {
+          "operation": "generation",
+          "mode": "sync",
+          "parameters": {
+            "max_images": 4,
+            "sizes": [
+              "1024x1024",
+              "1536x1024"
+            ],
+            "qualities": [
+              "standard",
+              "high"
+            ]
+          },
+          "input_limits": {
+            "max_images": 0,
+            "max_image_bytes": 0,
+            "mime_types": [],
+            "max_request_bytes": 268435456
+          },
+          "result_formats": [
+            "b64_json",
+            "url"
+          ],
+          "cancel_supported": false
+        },
+        {
+          "operation": "edit",
+          "mode": "single_async",
+          "parameters": {
+            "max_images": 1,
+            "sizes": [
+              "1024x1024"
+            ],
+            "qualities": [
+              "standard"
+            ]
+          },
+          "input_limits": {
+            "max_images": 1,
+            "max_image_bytes": 20971520,
+            "mime_types": [
+              "image/png",
+              "image/jpeg",
+              "image/webp"
+            ],
+            "max_request_bytes": 268435456
+          },
+          "result_formats": [
+            "b64_json",
+            "url"
+          ],
+          "cancel_supported": false
+        }
+      ],
+      "pricing": {
+        "status": "available",
+        "rates": [
+          {
+            "operation": "generation",
+            "mode": "sync",
+            "unit": "image",
+            "quantity_basis": "output_image_count",
+            "conditions": {
+              "size_tier": "1K"
+            },
+            "unit_price": {
+              "ledger_amount": "0",
+              "ledger_unit": "CNY"
+            }
+          },
+          {
+            "operation": "generation",
+            "mode": "sync",
+            "unit": "image",
+            "quantity_basis": "output_image_count",
+            "conditions": {
+              "size_tier": "2K"
+            },
+            "unit_price": {
+              "ledger_amount": "0.25000000",
+              "ledger_unit": "CNY"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "sample-paused",
+      "display_name": "Synthetic Paused",
+      "family": "image-2.6",
+      "preference_rank": 0,
+      "availability": "temporarily_unavailable",
+      "capabilities": [
+        {
+          "operation": "generation",
+          "mode": "sync",
+          "parameters": {
+            "max_images": 4,
+            "sizes": [
+              "1024x1024"
+            ],
+            "qualities": [
+              "standard"
+            ]
+          },
+          "input_limits": {
+            "max_images": 0,
+            "max_image_bytes": 0,
+            "mime_types": [],
+            "max_request_bytes": 268435456
+          },
+          "result_formats": [
+            "b64_json",
+            "url"
+          ],
+          "cancel_supported": false
+        }
+      ],
+      "pricing": {
+        "status": "hidden"
+      }
+    },
+    {
+      "id": "sample-edit-sync",
+      "display_name": "Synthetic Synchronous Editor",
+      "family": "image-2.6",
+      "preference_rank": 3,
+      "availability": "configured",
+      "capabilities": [
+        {
+          "operation": "edit",
+          "mode": "sync",
+          "parameters": {
+            "max_images": 1,
+            "sizes": [
+              "1024x1024"
+            ],
+            "qualities": [
+              "standard"
+            ]
+          },
+          "input_limits": {
+            "max_images": 1,
+            "max_image_bytes": 20971520,
+            "mime_types": [
+              "image/png",
+              "image/jpeg",
+              "image/webp"
+            ],
+            "max_request_bytes": 268435456
+          },
+          "result_formats": [
+            "b64_json",
+            "url"
+          ],
+          "cancel_supported": false
+        }
+      ],
+      "pricing": {
+        "status": "available",
+        "rates": [
+          {
+            "operation": "edit",
+            "mode": "sync",
+            "unit": "per_request",
+            "quantity_basis": "output_image_count",
+            "unit_price": {
+              "ledger_amount": "0.50",
+              "ledger_unit": "CNY"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "observed_at": "2026-11-19T00:00:00Z"
+}

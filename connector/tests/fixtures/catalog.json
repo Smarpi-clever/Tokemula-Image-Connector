@@ -1,0 +1,54 @@
+{
+  "can_submit": true,
+  "data": [
+    {
+      "id": "sample-fast",
+      "display_name": "Synthetic Fast",
+      "preference_rank": 1,
+      "availability": "configured",
+      "capabilities": [
+        {
+          "operation": "generation",
+          "mode": "sync",
+          "parameters": {"max_images": 2, "sizes": ["1024x1024"], "qualities": ["standard"]}
+        }
+      ],
+      "pricing": {"status": "unknown"}
+    },
+    {
+      "id": "sample-26",
+      "display_name": "Synthetic Image Family",
+      "family": "image-2.6",
+      "preference_rank": 50,
+      "availability": "configured",
+      "capabilities": [
+        {
+          "operation": "generation",
+          "mode": "sync",
+          "parameters": {"max_images": 4, "sizes": ["1024x1024", "1536x1024"], "qualities": ["standard", "high"]}
+        },
+        {
+          "operation": "edit",
+          "mode": "single_async",
+          "parameters": {"max_images": 1, "sizes": ["1024x1024"], "qualities": ["standard"]}
+        }
+      ],
+      "pricing": {"status": "available", "amount": {"ledger_amount": "0", "ledger_unit": "TEST_CREDIT"}}
+    },
+    {
+      "id": "sample-paused",
+      "display_name": "Synthetic Paused",
+      "family": "image-2.6",
+      "preference_rank": 0,
+      "availability": "temporarily_unavailable",
+      "capabilities": [
+        {
+          "operation": "generation",
+          "mode": "sync",
+          "parameters": {"max_images": 4, "sizes": ["1024x1024"], "qualities": ["standard"]}
+        }
+      ],
+      "pricing": {"status": "hidden"}
+    }
+  ]
+}

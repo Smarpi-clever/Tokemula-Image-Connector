@@ -1,0 +1,14 @@
+{
+  "name": "Tokemula Image",
+  "name_zh": "Tokemula 图片",
+  "name_en": "Tokemula Image",
+  "description": "Generate and edit images with Tokemula, recover results and read actual costs.",
+  "description_zh": "通过 Tokemula 生成与编辑图片，按任务引用恢复结果，并查看实际费用。",
+  "description_en": "Generate and edit images with Tokemula, recover results and read actual costs.",
+  "source": "tokemula-image",
+  "type": "mcp",
+  "version": "0.1.0",
+  "minWorkbuddyVersion": "5.11.3",
+  "examples_zh": ["用 Tokemula 生成一张咖啡店海报。", "按这两张参考图的顺序编辑图片。", "查询这个批次的结果，不要重新生成。"],
+  "examples_en": ["Create a cafe poster with Tokemula.", "Edit the image using these two references in order.", "Retrieve this batch result without generating it again."]
+}

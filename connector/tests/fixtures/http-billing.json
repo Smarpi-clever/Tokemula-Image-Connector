@@ -1,0 +1,8 @@
+{
+  "schema_version": "1",
+  "request_ref": "fixture-request",
+  "status": "settled",
+  "visibility": "visible",
+  "settlement_source": "balance_debit",
+  "amount": { "ledger_amount": "0", "ledger_unit": "CNY" }
+}
