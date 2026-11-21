@@ -32,6 +32,14 @@ B1 的 `Catalog`、`SelectionRequest`、`FeeReceipt` 继续供离线调用者直
 
 返回 MCP image 与结构化元信息（selected_model、effective_model/source、状态与request_ref），图片格式由实际内容验证。URL 用独立、无 Authorization 的 HTTP client 下载，下载重定向同样不携带 API 凭据；URL 不写入工具诊断。小图保持原始inline。按SDK官方响应类型序列化后，含request ID、所有图片及元信息的消息预算为8MiB（低于默认16MiB传输上限）；超出时按最大图片逐个改为256像素内的PNG预览，完整原图另存至当前用户私有缓存，直到整条响应符合预算。文本和 `local_files[].inline_representation="preview"` 明确区分预览/原图；每条local_files含image_index、绝对path、原图mime_type及expires_at。原图保留24小时，启动或下次工具操作清理本产品命名的过期普通文件；不删输入、无关文件或链接目标，不运行后台清理。Unix目录0700、文件0600；Windows使用当前用户LocalAppData缓存的继承访问控制。输入20MiB和像素支持范围保持不变。远程到期时间单列，未知为null；本地缓存期限不推定远程URL期限。
 
+### MCP Apps 内嵌图片视图
+
+客户端协商 `capabilities.extensions["io.modelcontextprotocol/ui"].mimeTypes` 包含 `text/html;profile=mcp-app` 时，生成、编辑、单异步查询和批量查询四个工具通过 `_meta.ui.resourceUri` 关联固定资源 `ui://tokemula/image-viewer`。它是无外部依赖的静态 HTML，图片直接来自本次 `ui/notifications/tool-result`，不经语言模型转抄、不先写图片文件。八个工具名、参数、默认选择、上游调用和错误/恢复引用保持。
+
+符合 8 MiB 消息预算的结果继续返回原始 `ImageContent`。超预算时，协议 image 块明确标为预览，本次原图只暂存进程内存；结果 `_meta["tokemula/inlineImages"]` 按 `image_index` 给出独有资源 URI、原始 MIME、字节数及分块数。视图通过同一 Server 的标准 `resources/read` 顺序读取每块最多 3 MiB 的原始字节，再在浏览器内存显示完整图片；每条资源响应也低于 8 MiB。此路径不调用图片文件缓存。内存资源从结果准备起保留 10 分钟，进程退出即结束；过期只报告状态，不重发请求。新结果、失败、无图或取消时清除当前视图，迟到的旧资源响应不会替换本次结果。
+
+“保存图片”只在用户点击时，以原始 MIME 与原始字节调用标准 `ui/download-file` 的内联 `EmbeddedResource`，交给宿主选择保存位置。宿主未声明相应资源读取或下载能力时，视图显示缺少的入口。未协商 MCP Apps 的客户端沿用上段的原始内联图/大图预览与 24 小时文件缓存合同。
+
 ## 错误及提交状态
 
 静态错误分类区分 credential_unavailable、invalid_parameters、model/permission 拒绝、authentication_failed、permission_denied、insufficient_balance、quota_exhausted、rate_limited、upstream_failed、timeout、transport_failed、invalid_response。HTTP payload 只读取已知错误 code，不回显消息、原始载荷、URL、请求头或认证。工具参数由入口一次转换，绕开SDK默认参数错误中的原值回显；Schema仍由同一参数类型生成。

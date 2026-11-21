@@ -5,6 +5,7 @@ pub mod configuration;
 pub mod distribution;
 pub mod http;
 pub mod image_parameters;
+mod image_view;
 pub mod management;
 pub mod mcp;
 mod output;

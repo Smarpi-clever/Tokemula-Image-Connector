@@ -1,6 +1,6 @@
 [package]
 name = "tokemula-image-connector"
-version = "0.1.0-wb1.3"
+version = "0.1.0-wb1.4"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

@@ -4,20 +4,20 @@
 
 ## 快速开始
 
-当前下载版 [**0.1.0-wb1.3**](https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/tag/v0.1.0-wb1.3) 支持 **macOS Apple Silicon（M 系列）**。先安装 Codex App / CLI 或 WorkBuddy AI 5.11.4，再打开终端运行对应命令。
+当前下载版 [**0.1.0-wb1.4**](https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/tag/v0.1.0-wb1.4) 支持 **macOS Apple Silicon（M 系列）**。先安装 Codex App / CLI 或 WorkBuddy AI 5.11.4，再打开终端运行对应命令。
 
 ### 1. 安装并接入客户端
 
 **Codex App / CLI**
 
 ```sh
-curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.3/install.sh | sh -s -- --harness codex
+curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.4/install.sh | sh -s -- --harness codex
 ```
 
 **WorkBuddy**
 
 ```sh
-curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.3/install.sh | sh -s -- --harness workbuddy
+curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.4/install.sh | sh -s -- --harness workbuddy
 ```
 
 命令会下载原生程序、自动校验、安装 MCP 与 Skill，并保留其他 MCP、编程 Provider 和已有设置。无需 Node、Rust 或 Python。安装脚本源码见 [`packaging/install.sh`](packaging/install.sh)。
@@ -36,7 +36,9 @@ AI 调用 `configure_tokemula` 后，打开返回的本机页面，填写自己�
 
 > 用 Tokemula 生成一张简洁插画：白色桌面上一盆仙人掌，旁边一个浅蓝色杯子，米白背景，无文字。完成后展示并提供可保存的原图。
 
-保存原图后，再发送：
+WorkBuddy 5.11.4 支持内嵌图片视图：生成或编辑后直接显示本次原图，点击“保存图片”时再选择保存位置，展示过程不自动写入图片文件。
+
+需要继续编辑时，保存原图后发送：
 
 > 用 Tokemula 编辑这张原图：`/图片的完整路径.png`。保留主体和构图，把背景改成浅桃色，在桌面左前方添加一片小绿叶。
 
@@ -88,7 +90,7 @@ WorkBuddy 的 `mcp.json`：
 - **App 放在其他位置？** 安装命令支持 `--client` 和 `--workbuddy-app`，用法见[安装说明](docs/DISTRIBUTION.md#快速安装mac-m-系列)。
 - **安装完成，客户端还没连接？** 重启客户端并新建任务，检查该 MCP 已启用；WorkBuddy 先完成“信任”。
 - **macOS 提示无法验证开发者？** 在系统设置的“隐私与安全性”中正常确认对应程序，见[Mac 教程](https://docs.tokemula.com/image-connector/)。当前包使用产品测试签名，Apple Developer ID 与公证尚待完成。
-- **已有安装？** 同版会复用；升级、恢复和保留设置卸载见[版本管理](docs/DISTRIBUTION.md)。
+- **已有安装？** 同版会复用；从 wb1.3 升级的保设置步骤见[版本管理](docs/DISTRIBUTION.md#从-wb13-升级)。
 
 ## 开发
 

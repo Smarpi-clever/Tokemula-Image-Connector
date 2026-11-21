@@ -2,18 +2,18 @@
 
 ## 快速安装（Mac M 系列）
 
-在终端选择一个客户端运行。安装器固定下载 [GitHub Release `v0.1.0-wb1.3`](https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/tag/v0.1.0-wb1.3) 的原生程序，先校验归档，再调用现有 `setup` 验签安装，最后注册 MCP 与 Skill。
+在终端选择一个客户端运行。安装器固定下载 [GitHub Release `v0.1.0-wb1.4`](https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/tag/v0.1.0-wb1.4) 的原生程序，先校验归档，再调用现有 `setup` 验签安装，最后注册 MCP 与 Skill。
 
 Codex App / CLI：
 
 ```sh
-curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.3/install.sh | sh -s -- --harness codex
+curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.4/install.sh | sh -s -- --harness codex
 ```
 
 WorkBuddy AI 5.11.4：
 
 ```sh
-curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.3/install.sh | sh -s -- --harness workbuddy
+curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.4/install.sh | sh -s -- --harness workbuddy
 ```
 
 安装脚本源码见 [`packaging/install.sh`](../packaging/install.sh)。它只使用 macOS 自带工具，不需要 Node、Rust 或 Python，不更改 PATH 或编程 Provider。已有同版安装会复用；其他版本或待恢复安装会给出明确提示，继续使用原版本管理入口。
@@ -22,12 +22,22 @@ Codex 自动查找 PATH 中的 CLI，再查标准应用目录内已支持的 App
 
 命令成功表示程序与接入已注册，WorkBuddy 可能仍为 `awaiting_confirmation`。重新打开客户端，WorkBuddy 首次接入先完成该连接器的原生信任；再新建任务，发送“配置 Tokemula 图片服务”，通过 `configure_tokemula` 返回的本机入口填写 Key 和默认设置。系统及客户端信任由用户在原生窗口确认。安装脚本不读取 Key、不打开配置页面，也不生成或编辑图片。
 
+## 从 wb1.3 升级
+
+本版更换了程序包验证公钥。先用旧版管理器默认卸载，Key、默认模型、尺寸和画质会保留：
+
+```sh
+"$HOME/.local/share/tokemula-image-connector/bin/tokemula-image" uninstall
+```
+
+然后运行上方对应客户端的新安装命令。两个客户端都使用时，分别运行 Codex 和 WorkBuddy 的安装命令；WorkBuddy 按提示重新确认连接器信任。原图和其他客户端配置保持原位。
+
 ## 从压缩包手动安装
 
 解压后在包目录运行：
 
 ```sh
-./tokemula-image setup --source . --trust-key /absolute/test-trust-public-key.txt
+./tokemula-image setup --source . --trust-key /absolute/trust-public-key.txt
 ```
 
 `setup` 部署本产品程序，与 `install --harness ...` 注册接入分开。默认安装根为用户 `.local/share/tokemula-image-connector`；可指定 `--install-root /absolute/owned/root`。程序返回可直接运行的稳定绝对路径，不修改 Shell 或全局 PATH，原解压目录可移走。

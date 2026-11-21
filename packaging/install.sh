@@ -13,8 +13,8 @@ native() {
     fi
 }
 main() {
-    version='0.1.0-wb1.3'
-    digest='f3c9bffa78b518f63cab92b6cb8317e0c2f178fced605bb87e2225472e63eae3'
+    version='0.1.0-wb1.4'
+    digest='2315b725f19621135e138ff8b161637f59c0f2c21a2a9c013f6b6c9695c72994'
     url="https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v$version/tokemula-image-connector-$version-macos-arm64.tar.gz"
     harness=''; client=''; workbuddy_app=''
     while [ "$#" -gt 0 ]; do
@@ -73,7 +73,7 @@ main() {
         [ "${actual%% *}" = "$digest" ] || fail '下载文件校验失败，未运行程序。'
         mkdir "$work/package"
         tar -xzf "$work/release.tar.gz" -C "$work/package"
-        printf '%s\n' '/AfYYtD9gb/rxeHqPm3K9bSmqySDpj9g+ddNH0t0y4c=' > "$work/trust-public-key.txt"
+        printf '%s\n' 'UHyBPGblmoIevgxFsMjCwlw6P9aokVhX41+k63HyLfc=' > "$work/trust-public-key.txt"
         native "$work/package/tokemula-image" setup --source "$work/package" --trust-key "$work/trust-public-key.txt"
     fi
     set -- "$manager" install --harness "$harness" --scope user

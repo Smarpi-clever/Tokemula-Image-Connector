@@ -3,6 +3,7 @@
 use crate::{
     configuration::SessionManager,
     http::{BatchProgress, CallError, ImageClient, RequestProgress, Submission},
+    image_view::{self, ImageView},
     output::OutputCache,
     settings::SettingsService,
     tasks::TaskStore,
@@ -172,6 +173,7 @@ pub struct ImageMcp {
     output_cache: Option<OutputCache>,
     settings: Option<SettingsService>,
     sessions: Option<SessionManager>,
+    image_view: ImageView,
 }
 
 impl ImageMcp {
@@ -241,6 +243,7 @@ impl ImageMcp {
             output_cache,
             settings: None,
             sessions: None,
+            image_view: ImageView::default(),
         };
         server.cleanup_outputs();
         server
@@ -418,7 +421,7 @@ impl ImageMcp {
         tokio::select! {
             biased;
             _ = context.ct.cancelled() => failure(progress.cancelled()),
-            result = client.submit_batch(&input, &progress) => self.render(result, &context.id)
+            result = client.submit_batch(&input, &progress) => self.render(result, &context.id, image_view::supported(context.client_capabilities()))
         }
     }
 
@@ -440,7 +443,7 @@ impl ImageMcp {
         tokio::select! {
             biased;
             _ = context.ct.cancelled() => failure(progress.cancelled()),
-            result = client.get_batch(&input, &progress) => self.render(result, &context.id)
+            result = client.get_batch(&input, &progress) => self.render(result, &context.id, image_view::supported(context.client_capabilities()))
         }
     }
 
@@ -461,7 +464,7 @@ impl ImageMcp {
         tokio::select! {
             biased;
             _ = context.ct.cancelled() => failure(progress.cancelled()),
-            result = client.cancel_batch(&input.batch_id, &progress) => self.render(result, &context.id)
+            result = client.cancel_batch(&input.batch_id, &progress) => self.render(result, &context.id, image_view::supported(context.client_capabilities()))
         }
     }
 
@@ -483,7 +486,7 @@ impl ImageMcp {
         tokio::select! {
             biased;
             _ = context.ct.cancelled() => failure(progress.cancelled()),
-            result = client.task(&input.task_id, &progress) => self.render(result, &context.id)
+            result = client.task(&input.task_id, &progress) => self.render(result, &context.id, image_view::supported(context.client_capabilities()))
         }
     }
 
@@ -528,7 +531,7 @@ impl ImageMcp {
         tokio::select! {
             biased;
             _ = context.ct.cancelled() => failure(progress.cancelled()),
-            result = client.execute(&input, None, &progress) => self.render(result, &context.id)
+            result = client.execute(&input, None, &progress) => self.render(result, &context.id, image_view::supported(context.client_capabilities()))
         }
     }
 
@@ -559,7 +562,7 @@ impl ImageMcp {
         tokio::select! {
             biased;
             _ = context.ct.cancelled() => failure(progress.cancelled()),
-            result = client.execute(&request, Some(&input), &progress) => self.render(result, &context.id)
+            result = client.execute(&request, Some(&input), &progress) => self.render(result, &context.id, image_view::supported(context.client_capabilities()))
         }
     }
 }
@@ -567,9 +570,66 @@ impl ImageMcp {
 #[tool_handler]
 impl ServerHandler for ImageMcp {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
-            rmcp::model::Implementation::new("tokemula-image-mcp", crate::distribution::VERSION),
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
         )
+        .with_server_info(rmcp::model::Implementation::new(
+            "tokemula-image-mcp",
+            crate::distribution::VERSION,
+        ))
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        let mut tools = Self::tool_router().list_all();
+        if image_view::supported(context.client_capabilities()) {
+            for tool in &mut tools {
+                if matches!(
+                    tool.name.as_ref(),
+                    "generate_image" | "edit_image" | "get_image_task" | "get_image_batch"
+                ) {
+                    tool.meta = Some(
+                        serde_json::from_value(serde_json::json!({
+                            "ui": { "resourceUri": image_view::URI }
+                        }))
+                        .expect("UI tool metadata"),
+                    );
+                }
+            }
+        }
+        let mut result = rmcp::model::ListToolsResult::with_all_items(tools);
+        if context
+            .protocol_version()
+            .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
+        {
+            result.ttl_ms = Some(0);
+            result.cache_scope = Some(rmcp::model::CacheScope::Public);
+        }
+        Ok(result)
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListResourcesResult, rmcp::ErrorData> {
+        Ok(rmcp::model::ListResourcesResult::with_all_items(vec![
+            image_view::resource(),
+        ]))
+    }
+
+    async fn read_resource(
+        &self,
+        request: rmcp::model::ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ReadResourceResponse, rmcp::ErrorData> {
+        self.image_view.read(&request.uri).map(Into::into)
     }
 }
 
@@ -646,8 +706,9 @@ impl ImageMcp {
         &self,
         result: Result<crate::http::ImageOutput, CallError>,
         id: &RequestId,
+        inline_ui: bool,
     ) -> CallToolResult {
-        let output = match result {
+        let mut output = match result {
             Ok(output) => output,
             Err(error) => {
                 let submission = error.submission;
@@ -702,6 +763,53 @@ impl ImageMcp {
             else {
                 return bounded(result, id, Submission::Unknown);
             };
+            if inline_ui {
+                let (bytes, mime) = (&output.images[index].0, output.images[index].1);
+                let mut preview = Cursor::new(Vec::new());
+                let decoded =
+                    image::load_from_memory(bytes).expect("HTTP boundary validated image bytes");
+                if decoded
+                    .thumbnail(256, 256)
+                    .write_to(&mut preview, ImageFormat::Png)
+                    .is_err()
+                {
+                    return failure(with_output_reference(
+                        CallError::new(
+                            "preview_failed",
+                            "原图预览编码失败；生成请求不会重发。",
+                            Submission::Unknown,
+                        ),
+                        result.structured_content.as_ref().expect("image metadata"),
+                    ));
+                }
+                result.content[index] =
+                    ContentBlock::image(STANDARD.encode(preview.into_inner()), "image/png");
+                let original = std::mem::take(&mut output.images[index].0);
+                let descriptor = match self.image_view.retain(original, mime, index) {
+                    Ok(descriptor) => descriptor,
+                    Err(_) => {
+                        return failure(with_output_reference(
+                            CallError::new(
+                                "image_view_unavailable",
+                                "无法建立本次图片的内存资源；生成请求不会重发。",
+                                Submission::Unknown,
+                            ),
+                            result.structured_content.as_ref().expect("image metadata"),
+                        ));
+                    }
+                };
+                let meta = result.meta.get_or_insert_with(Default::default);
+                meta.entry("tokemula/inlineImages".to_owned())
+                    .or_insert_with(|| serde_json::json!([]))
+                    .as_array_mut()
+                    .expect("inline image descriptors")
+                    .push(descriptor);
+                result.content.push(ContentBlock::text(format!(
+                    "第 {} 张的协议内联图为预览；内嵌图片视图从本次内存资源显示完整原图，未自动写入图片文件。", index + 1
+                )));
+                previews[index] = true;
+                continue;
+            }
             let Some(cache) = &self.output_cache else {
                 return failure(with_output_reference(
                     CallError::new(
@@ -767,3 +875,7 @@ fn invalid_parameters() -> CallToolResult {
         crate::http::Submission::NotSubmitted,
     ))
 }
+
+#[cfg(test)]
+#[path = "image_view_tests.rs"]
+mod image_view_tests;

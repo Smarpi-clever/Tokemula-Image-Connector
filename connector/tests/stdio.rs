@@ -29,7 +29,11 @@ fn binary_command() -> Command {
     command
 }
 
-async fn check_protocol_lifecycle(version: ProtocolVersion, lifecycle: ClientLifecycleMode) {
+async fn check_protocol_lifecycle(
+    version: ProtocolVersion,
+    lifecycle: ClientLifecycleMode,
+    ui: bool,
+) {
     let directory = tempfile::tempdir().unwrap();
     let mut child = binary_command()
         .current_dir(directory.path())
@@ -63,7 +67,14 @@ async fn check_protocol_lifecycle(version: ProtocolVersion, lifecycle: ClientLif
     let client = timeout(
         DEADLINE,
         ClientConfig::new(
-            Default::default(),
+            if ui {
+                serde_json::from_value(serde_json::json!({"extensions":{
+                    "io.modelcontextprotocol/ui":{"mimeTypes":["text/html;profile=mcp-app"]}
+                }}))
+                .unwrap()
+            } else {
+                Default::default()
+            },
             Implementation::new(SYNTHETIC_SECRET, "0.0.test"),
         )
         .with_protocol_version(version.clone())
@@ -88,13 +99,42 @@ async fn check_protocol_lifecycle(version: ProtocolVersion, lifecycle: ClientLif
             "edit_image",
             "generate_image",
             "get_image_batch",
-            "get_image_billing",
             "get_image_task",
             "list_image_models",
             "submit_image_batch"
         ]
     );
     assert!(tools.next_cursor.is_none());
+    for tool in &tools.tools {
+        let has_ui = ui
+            && matches!(
+                tool.name.as_ref(),
+                "generate_image" | "edit_image" | "get_image_task" | "get_image_batch"
+            );
+        assert_eq!(tool.meta.is_some(), has_ui);
+    }
+    if ui {
+        let resource = timeout(
+            DEADLINE,
+            client.read_resource(rmcp::model::ReadResourceRequestParams::new(
+                "ui://tokemula/image-viewer",
+            )),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let resource = serde_json::to_value(resource).unwrap();
+        assert_eq!(
+            resource["contents"][0]["mimeType"],
+            "text/html;profile=mcp-app"
+        );
+        assert!(
+            resource["contents"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("ui/notifications/tool-result")
+        );
+    }
     let edit = tools
         .tools
         .iter()
@@ -142,29 +182,6 @@ async fn check_protocol_lifecycle(version: ProtocolVersion, lifecycle: ClientLif
     let response = timeout(
         DEADLINE,
         client.call_tool_once(
-            CallToolRequestParams::new("get_image_billing").with_arguments(
-                serde_json::json!({"request_ref":"synthetic-previous-request"})
-                    .as_object()
-                    .unwrap()
-                    .clone(),
-            ),
-        ),
-    )
-    .await
-    .expect("unconfigured billing call timed out")
-    .unwrap();
-    let CallToolResponse::Complete(result) = response else {
-        panic!("unconfigured billing must return a complete credential error");
-    };
-    assert_eq!(result.is_error, Some(true));
-    assert_eq!(
-        result.structured_content.as_ref().unwrap()["code"],
-        "credential_unavailable"
-    );
-
-    let response = timeout(
-        DEADLINE,
-        client.call_tool_once(
             CallToolRequestParams::new("generate_image").with_arguments(
                 serde_json::json!({"prompt": "synthetic prompt", "n": SYNTHETIC_SECRET})
                     .as_object()
@@ -188,8 +205,8 @@ async fn check_protocol_lifecycle(version: ProtocolVersion, lifecycle: ClientLif
     let response = timeout(
         DEADLINE,
         client.call_tool_once(
-            CallToolRequestParams::new("get_image_billing").with_arguments(
-                serde_json::json!({"request_ref":SYNTHETIC_SECRET,"api_key":SYNTHETIC_SECRET})
+            CallToolRequestParams::new("get_image_task").with_arguments(
+                serde_json::json!({"task_id":"synthetic-task","api_key":SYNTHETIC_SECRET})
                     .as_object()
                     .unwrap()
                     .clone(),
@@ -197,10 +214,10 @@ async fn check_protocol_lifecycle(version: ProtocolVersion, lifecycle: ClientLif
         ),
     )
     .await
-    .expect("invalid billing parameters timed out")
+    .expect("invalid task parameters timed out")
     .unwrap();
     let CallToolResponse::Complete(result) = response else {
-        panic!("invalid billing parameters must return a complete tool error");
+        panic!("invalid task parameters must return a complete tool error");
     };
     assert_eq!(
         result.structured_content.as_ref().unwrap()["code"],
@@ -236,6 +253,7 @@ async fn legacy_initialize_discovers_tools_calls_without_credentials_and_exits_o
     check_protocol_lifecycle(
         ProtocolVersion::V_2025_11_25,
         ClientLifecycleMode::Initialize,
+        false,
     )
     .await;
 }
@@ -247,6 +265,17 @@ async fn discover_2026_07_28_discovers_tools_calls_without_credentials_and_exits
         ClientLifecycleMode::Discover {
             preferred_versions: vec![ProtocolVersion::V_2026_07_28],
         },
+        false,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn ui_client_discovers_eight_tools_and_reads_the_inline_view_without_credentials() {
+    check_protocol_lifecycle(
+        ProtocolVersion::V_2025_11_25,
+        ClientLifecycleMode::Initialize,
+        true,
     )
     .await;
 }
