@@ -2,6 +2,7 @@
 
 use crate::{
     Catalog, CoreError, ExecutionMode, Operation, SelectionRequest,
+    performance::OperationTrace,
     tasks::{TaskRecord, TaskStatus, TaskStore},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -37,6 +38,7 @@ pub struct ImageClient {
     pub(crate) task_store: Option<TaskStore>,
     pub(crate) preferences: Option<crate::settings::ModelPreferences>,
     pub(crate) image_preferences: Option<crate::image_parameters::ImagePreferences>,
+    trace: Option<OperationTrace>,
 }
 
 impl fmt::Debug for ImageClient {
@@ -494,6 +496,7 @@ impl ImageClient {
             task_store: None,
             preferences: None,
             image_preferences: None,
+            trace: None,
         })
     }
 
@@ -508,6 +511,24 @@ impl ImageClient {
         Ok(client)
     }
 
+    pub(crate) fn with_trace(&self, trace: OperationTrace) -> Self {
+        let mut client = self.clone();
+        client.trace = Some(trace);
+        client
+    }
+
+    fn mark(&self, stage: &'static str) {
+        if let Some(trace) = &self.trace {
+            trace.mark(stage);
+        }
+    }
+
+    fn counts(&self, stage: &'static str, counts: &[(&'static str, usize)]) {
+        if let Some(trace) = &self.trace {
+            trace.counts(stage, counts);
+        }
+    }
+
     fn authorization(&self) -> Result<HeaderValue, CallError> {
         self.authorization.clone().ok_or_else(|| {
             CallError::new(
@@ -520,6 +541,7 @@ impl ImageClient {
 
     pub(crate) async fn catalog(&self) -> Result<(Catalog, Value), CallError> {
         let auth = self.authorization()?;
+        self.mark("catalog_get_start");
         let response = self
             .api
             .get(
@@ -531,7 +553,21 @@ impl ImageClient {
             .send()
             .await
             .map_err(|e| transport_error(&e, false))?;
-        let wire = read_json(response, false, MAX_METADATA_RESPONSE_BYTES).await?;
+        self.counts(
+            "catalog_headers",
+            &[("http_status", response.status().as_u16() as usize)],
+        );
+        self.mark("catalog_body_start");
+        let wire = read_json_traced(
+            response,
+            false,
+            MAX_METADATA_RESPONSE_BYTES,
+            self.trace.as_ref(),
+            "catalog_body_complete",
+            "catalog_json_complete",
+        )
+        .await?;
+        self.mark("catalog_validation_start");
         let invalid = || {
             CallError::new(
                 "invalid_catalog",
@@ -607,6 +643,7 @@ impl ImageClient {
                 .map_err(|_| invalid())?
         };
         let visible = json!({"schema_version":"1","observed_at":observed_at,"can_submit":catalog.can_submit(),"submission_restriction":restriction,"models":visible_models});
+        self.mark("catalog_validation_complete");
         Ok((catalog, visible))
     }
 
@@ -668,15 +705,21 @@ impl ImageClient {
                 )
             })?;
         let asynchronous = request.mode == ExecutionMode::SingleAsync;
+        self.mark("candidate_selection_start");
         let (selected_id, request, request_parameters) = if let Some(edit) = edit {
             self.edit_request(&catalog, &visible, &request, input, edit)
                 .await?
         } else {
             self.generation_request(&catalog, &visible, &request, input, asynchronous)?
         };
+        self.mark("candidate_selection_complete");
         let model_selection =
             self.preference_metadata(&catalog, &selected_id, input.model.as_deref());
         progress.submitted.store(true, Ordering::SeqCst);
+        if let Some(trace) = &self.trace {
+            trace.submission(Submission::Unknown);
+        }
+        self.mark("image_post_start");
         let response = self.api.execute(request).await.map_err(|e| {
             let mut error = transport_error(&e, !e.is_connect());
             if !model_selection.is_null() {
@@ -684,6 +727,10 @@ impl ImageClient {
             }
             error
         })?;
+        self.counts(
+            "image_post_headers",
+            &[("http_status", response.status().as_u16() as usize)],
+        );
         let request_ref = response
             .headers()
             .get("x-client-request-id")
@@ -698,7 +745,8 @@ impl ImageClient {
         async {
             let status = response.status();
             let retry_after = retry_after(&response);
-            let value = read_json(
+            self.mark("image_post_body_start");
+            let value = read_json_traced(
                 response,
                 true,
                 if asynchronous {
@@ -706,6 +754,9 @@ impl ImageClient {
                 } else {
                     response_limit
                 },
+                self.trace.as_ref(),
+                "image_post_body_complete",
+                "image_post_json_complete",
             )
             .await?;
             if asynchronous {
@@ -721,6 +772,9 @@ impl ImageClient {
                 }
                 *progress.task_id.lock().expect("task progress") = Some(task.task_id.clone());
                 progress.accepted.store(true, Ordering::SeqCst);
+                if let Some(trace) = &self.trace {
+                    trace.submission(Submission::Accepted);
+                }
                 let record = task.record(Some(selected_id), None);
                 let mut metadata = task.metadata(&record, retry_after);
                 metadata["submission"] = json!("accepted");
@@ -775,12 +829,31 @@ impl ImageClient {
         let mut images = Vec::new();
         let mut remote_expiries = Vec::new();
         let mut dimensions = Vec::new();
-        for item in response.data {
-            let bytes = match (item.b64_json, item.url) {
-                (Some(encoded), None) => STANDARD.decode(encoded).map_err(|_| {
-                    CallError::new("invalid_image", "图片结果编码无效。", Submission::Unknown)
-                })?,
+        for (image_index, item) in response.data.into_iter().enumerate() {
+            let bytes = match (
+                item.b64_json.filter(|encoded| !encoded.trim().is_empty()),
+                item.url,
+            ) {
+                (Some(encoded), _) => {
+                    self.counts(
+                        "image_source_b64",
+                        &[
+                            ("image_index", image_index),
+                            ("encoded_bytes", encoded.len()),
+                        ],
+                    );
+                    self.mark("image_decode_start");
+                    let bytes = STANDARD.decode(encoded).map_err(|_| {
+                        CallError::new("invalid_image", "图片结果编码无效。", Submission::Unknown)
+                    })?;
+                    self.counts(
+                        "image_decode_complete",
+                        &[("image_index", image_index), ("bytes", bytes.len())],
+                    );
+                    bytes
+                }
                 (None, Some(url)) => {
+                    self.counts("image_source_url", &[("image_index", image_index)]);
                     let url = Url::parse(&url).map_err(|_| {
                         CallError::new("invalid_image", "图片下载地址无效。", Submission::Unknown)
                     })?;
@@ -794,12 +867,17 @@ impl ImageClient {
                             Submission::Unknown,
                         ));
                     }
+                    self.mark("image_download_start");
                     let download = self
                         .download
                         .get(url)
                         .send()
                         .await
                         .map_err(|e| transport_error(&e, true))?;
+                    self.counts(
+                        "image_download_headers",
+                        &[("http_status", download.status().as_u16() as usize)],
+                    );
                     if !download.status().is_success() {
                         return Err(CallError::new(
                             "image_download_failed",
@@ -807,7 +885,13 @@ impl ImageClient {
                             Submission::Unknown,
                         ));
                     }
-                    read_bytes(download, MAX_IMAGE_BYTES, true).await?
+                    self.mark("image_download_body_start");
+                    let bytes = read_bytes(download, MAX_IMAGE_BYTES, true).await?;
+                    self.counts(
+                        "image_download_body_complete",
+                        &[("image_index", image_index), ("bytes", bytes.len())],
+                    );
+                    bytes
                 }
                 _ => {
                     return Err(CallError::new(
@@ -817,7 +901,12 @@ impl ImageClient {
                     ));
                 }
             };
+            self.counts("image_validation_start", &[("image_index", image_index)]);
             let (mime, width, height) = image_info(&bytes, Submission::Unknown)?;
+            self.counts(
+                "image_validation_complete",
+                &[("image_index", image_index), ("bytes", bytes.len())],
+            );
             dimensions.push(json!({"width":width,"height":height}));
             images.push((bytes, mime));
             remote_expiries.push(item.expires_at);
@@ -831,6 +920,9 @@ impl ImageClient {
         });
         metadata["remote_expires_at"] = json!(remote_expiries);
         metadata["local_files"] = json!([]);
+        if let Some(trace) = &self.trace {
+            trace.submission(Submission::Accepted);
+        }
         Ok(ImageOutput { images, metadata })
     }
 
@@ -1137,6 +1229,25 @@ async fn read_json(
     submitted: bool,
     success_limit: usize,
 ) -> Result<Value, CallError> {
+    read_json_traced(
+        response,
+        submitted,
+        success_limit,
+        None,
+        "body_complete",
+        "json_complete",
+    )
+    .await
+}
+
+async fn read_json_traced(
+    response: Response,
+    submitted: bool,
+    success_limit: usize,
+    trace: Option<&OperationTrace>,
+    body_stage: &'static str,
+    json_stage: &'static str,
+) -> Result<Value, CallError> {
     let status = response.status();
     let limit = if status.is_success() {
         success_limit
@@ -1144,6 +1255,9 @@ async fn read_json(
         MAX_METADATA_RESPONSE_BYTES
     };
     let bytes = read_bytes(response, limit, submitted).await?;
+    if let Some(trace) = trace {
+        trace.counts(body_stage, &[("bytes", bytes.len())]);
+    }
     if !status.is_success() {
         let code = serde_json::from_slice::<Value>(&bytes).ok().and_then(|v| {
             v.get("error")
@@ -1173,7 +1287,7 @@ async fn read_json(
         };
         return Err(CallError::new(code, message, state));
     }
-    serde_json::from_slice(&bytes).map_err(|_| {
+    let result = serde_json::from_slice(&bytes).map_err(|_| {
         CallError::new(
             "invalid_response",
             "服务响应格式无效。",
@@ -1183,7 +1297,11 @@ async fn read_json(
                 Submission::NotSubmitted
             },
         )
-    })
+    });
+    if let Some(trace) = trace {
+        trace.mark(json_stage);
+    }
+    result
 }
 
 fn image_mime(bytes: &[u8], submission: Submission) -> Result<&'static str, CallError> {

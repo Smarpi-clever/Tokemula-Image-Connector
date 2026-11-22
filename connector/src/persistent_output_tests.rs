@@ -4,7 +4,10 @@ use serde_json::json;
 use std::{fs, path::PathBuf};
 
 fn png(noise: bool) -> Vec<u8> {
-    let width = if noise { 2048 } else { 32 };
+    png_size(noise, if noise { 2048 } else { 32 })
+}
+
+fn png_size(noise: bool, width: u32) -> Vec<u8> {
     let mut image = image::RgbImage::new(width, width);
     let mut seed = 1u64;
     for (index, byte) in image.as_mut().iter_mut().enumerate() {
@@ -118,6 +121,194 @@ fn failed_desktop_write_keeps_accepted_state_and_original_reference() {
     assert_eq!(metadata["local_files"], json!([]));
 }
 
+#[test]
+fn files_delivery_skips_image_encoding_and_preserves_originals_with_smaller_wire_result() {
+    let directory = tempfile::tempdir().unwrap();
+    let desktop = directory.path().join("桌面 空格");
+    fs::create_dir(&desktop).unwrap();
+    let server = ImageMcp::with_storage(ImageClient::new(None).unwrap(), None, None)
+        .with_persistent_output_for_tests(desktop.join("Tokemula-Images"));
+    let images = vec![png_size(true, 512), png(false)];
+    let inline = server.render(
+        output(images.clone(), "same-fixture"),
+        &RequestId::Number(1),
+        false,
+    );
+    let trace = OperationTrace::new("files-fixture");
+    let files = server.render_with_mode(
+        output(images.clone(), "same-fixture"),
+        &RequestId::Number(1),
+        false,
+        ImageResultMode::Files,
+        Some(&trace),
+    );
+    assert_ne!(files.is_error, Some(true));
+    assert!(files.meta.is_none());
+    let content = serde_json::to_value(&files.content).unwrap();
+    assert!(
+        content
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|block| block["type"] == "text")
+    );
+    let metadata = files.structured_content.as_ref().unwrap();
+    assert_eq!(metadata["request_ref"], "same-fixture");
+    for (index, bytes) in images.iter().enumerate() {
+        let file = &metadata["local_files"][index];
+        let path = PathBuf::from(file["path"].as_str().unwrap());
+        assert_eq!(fs::read(&path).unwrap(), *bytes);
+        assert_eq!(file["image_index"], index);
+        assert_eq!(file["mime_type"], "image/png");
+        assert_eq!(file["width"], if index == 0 { 512 } else { 32 });
+        assert_eq!(file["height"], file["width"]);
+        assert_eq!(file["persistent"], true);
+        assert_eq!(file["retention"], "user_managed");
+        assert_eq!(file["inline_representation"], "none");
+        assert!(file["expires_at"].is_null());
+        assert!(content.to_string().contains(path.to_str().unwrap()));
+    }
+    let events = trace.events();
+    assert!(
+        events
+            .iter()
+            .any(|event| event["stage"] == "image_encoding_skipped")
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| event["stage"] == "image_encoding_start"
+                || event["stage"] == "image_encoding_end")
+    );
+    let inline_bytes = wire_bytes(&inline, &RequestId::Number(1));
+    let files_bytes = wire_bytes(&files, &RequestId::Number(1));
+    assert!(files_bytes < inline_bytes);
+    assert!(files_bytes <= MAX_WIRE_BYTES);
+    println!(
+        "PERF2_WIRE_BYTES inline={inline_bytes} files={files_bytes} original_bytes={}",
+        images.iter().map(Vec::len).sum::<usize>()
+    );
+    let original = &metadata["local_files"][0]["path"];
+    let edited = server.render_with_mode(
+        output(vec![images[0].clone()], "edited-fixture"),
+        &RequestId::Number(2),
+        false,
+        ImageResultMode::Files,
+        None,
+    );
+    let edit_path = &edited.structured_content.as_ref().unwrap()["local_files"][0]["path"];
+    assert_ne!(original, edit_path);
+    assert_eq!(fs::read(original.as_str().unwrap()).unwrap(), images[0]);
+    assert_eq!(fs::read(edit_path.as_str().unwrap()).unwrap(), images[0]);
+}
+
+#[test]
+fn files_delivery_partial_save_failure_keeps_already_saved_path_and_accepted_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let server = ImageMcp::with_storage(ImageClient::new(None).unwrap(), None, None)
+        .with_persistent_output_for_tests(directory.path().join("Tokemula-Images"));
+    let bytes = png(false);
+    let mut fixture = output(vec![bytes.clone(), bytes.clone()], "partial-save").unwrap();
+    // Inject a storage error for the second image without touching user files or permissions.
+    fixture.images[1].1 = "synthetic/storage-failure";
+    let result = server.render_with_mode(
+        Ok(fixture),
+        &RequestId::Number(1),
+        false,
+        ImageResultMode::Files,
+        None,
+    );
+    assert_eq!(result.is_error, Some(true));
+    let metadata = result.structured_content.as_ref().unwrap();
+    assert_eq!(metadata["code"], "image_storage_failed");
+    assert_eq!(metadata["submission"], "accepted");
+    assert_eq!(metadata["request_ref"], "partial-save");
+    let files = metadata["local_files"].as_array().unwrap();
+    assert_eq!(files.len(), 1);
+    let path = files[0]["path"].as_str().unwrap();
+    assert_eq!(fs::read(path).unwrap(), bytes);
+    assert!(
+        serde_json::to_string(&result.content)
+            .unwrap()
+            .contains(path)
+    );
+    assert_eq!(files[0]["inline_representation"], "none");
+}
+
+#[test]
+fn files_preflight_preserves_legacy_and_rejects_missing_storage_async_and_unwritable_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let legacy = ImageMcp::with_storage(ImageClient::new(None).unwrap(), None, None);
+    assert!(
+        legacy
+            .preflight_delivery(None, ImageResultMode::Inline)
+            .is_ok()
+    );
+    assert_eq!(
+        legacy
+            .preflight_delivery(None, ImageResultMode::Files)
+            .unwrap_err()
+            .submission,
+        Submission::NotSubmitted
+    );
+    let server = legacy.with_persistent_output_for_tests(directory.path().join("Tokemula-Images"));
+    assert!(
+        server
+            .preflight_delivery(None, ImageResultMode::Files)
+            .is_ok()
+    );
+    let error = server
+        .preflight_delivery(Some(ImageMode::SingleAsync), ImageResultMode::Files)
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_parameters");
+    assert_eq!(error.submission, Submission::NotSubmitted);
+    let blocked = directory.path().join("not-a-directory");
+    fs::write(&blocked, b"keep").unwrap();
+    let server = server.with_persistent_output_for_tests(blocked);
+    let error = server
+        .preflight_delivery(None, ImageResultMode::Files)
+        .unwrap_err();
+    assert_eq!(error.code, "image_storage_unavailable");
+    assert_eq!(error.submission, Submission::NotSubmitted);
+}
+
+#[test]
+fn render_errors_keep_the_actual_last_stage_and_fixed_error_code() {
+    let directory = tempfile::tempdir().unwrap();
+    let server = ImageMcp::with_storage(ImageClient::new(None).unwrap(), None, None);
+    let trace = OperationTrace::new("http-error-fixture");
+    trace.mark("post_body_start");
+    let result = server.render_traced(
+        Err(CallError::new("timeout", "synthetic", Submission::Unknown)),
+        &RequestId::Number(1),
+        false,
+        ImageResultMode::Inline,
+        &trace,
+    );
+    assert_eq!(result.is_error, Some(true));
+    let terminal = trace.events().pop().unwrap();
+    assert_eq!(terminal["last_stage"], "post_body_start");
+    assert_eq!(terminal["code"], "timeout");
+    assert_eq!(terminal["submission"], "unknown");
+
+    let blocked = directory.path().join("not-a-directory");
+    fs::write(&blocked, b"keep").unwrap();
+    let server = server.with_persistent_output_for_tests(blocked);
+    let trace = OperationTrace::new("save-error-fixture");
+    let result = server.render_traced(
+        output(vec![png(false)], "already-returned"),
+        &RequestId::Number(1),
+        false,
+        ImageResultMode::Files,
+        &trace,
+    );
+    assert_eq!(result.is_error, Some(true));
+    let terminal = trace.events().pop().unwrap();
+    assert_eq!(terminal["last_stage"], "original_save_start");
+    assert_eq!(terminal["code"], "image_storage_failed");
+    assert_eq!(terminal["submission"], "accepted");
+}
+
 #[tokio::test]
 async fn persistent_delivery_has_no_ui_tool_binding_even_when_client_supports_apps() {
     let directory = tempfile::tempdir().unwrap();
@@ -179,10 +370,17 @@ fn export_desktop_fixture_through_real_delivery() {
     image::DynamicImage::ImageRgb8(picture)
         .write_to(&mut encoded, ImageFormat::Png)
         .unwrap();
-    let result = server.render(
+    let result_mode = match std::env::var("TOKEMULA_TEST_EXPORT_RESULT_MODE").as_deref() {
+        Ok("files") => ImageResultMode::Files,
+        Err(_) | Ok("inline") => ImageResultMode::Inline,
+        _ => panic!("export result mode must be inline or files"),
+    };
+    let result = server.render_with_mode(
         output(vec![encoded.into_inner()], "wb3-synthetic-desktop-fixture"),
         &RequestId::Number(1),
         false,
+        result_mode,
+        None,
     );
     assert_ne!(result.is_error, Some(true));
     fs::write(receipt, serde_json::to_vec_pretty(&result).unwrap()).unwrap();

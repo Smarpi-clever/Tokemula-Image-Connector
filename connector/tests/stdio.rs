@@ -154,6 +154,7 @@ async fn check_protocol_lifecycle(
         "quality",
         "n",
         "mode",
+        "result_mode",
     ] {
         assert!(
             schema["properties"].get(field).is_some(),
@@ -161,6 +162,24 @@ async fn check_protocol_lifecycle(
         );
     }
     assert_eq!(schema["required"], serde_json::json!(["prompt"]));
+    for name in ["generate_image", "edit_image"] {
+        let tool = tools.tools.iter().find(|tool| tool.name == name).unwrap();
+        let schema = serde_json::to_value(&tool.input_schema).unwrap();
+        let reference = schema["properties"]["result_mode"]["anyOf"][0]["$ref"]
+            .as_str()
+            .unwrap()
+            .strip_prefix('#')
+            .unwrap();
+        assert_eq!(
+            schema.pointer(reference).unwrap()["enum"],
+            serde_json::json!(["inline", "files"])
+        );
+        assert_eq!(
+            schema["not"]["required"],
+            serde_json::json!(["result_mode", "mode"])
+        );
+        assert_eq!(schema["not"]["properties"]["mode"]["const"], "single_async");
+    }
 
     let response = timeout(
         DEADLINE,
@@ -202,6 +221,38 @@ async fn check_protocol_lifecycle(
         result.structured_content.as_ref().unwrap()["code"],
         "invalid_parameters"
     );
+
+    for (name, arguments) in [
+        (
+            "generate_image",
+            serde_json::json!({"prompt": SYNTHETIC_SECRET, "result_mode": "invalid"}),
+        ),
+        (
+            "generate_image",
+            serde_json::json!({"prompt": SYNTHETIC_SECRET, "result_mode": "files", "mode": "single_async"}),
+        ),
+        (
+            "edit_image",
+            serde_json::json!({"prompt": SYNTHETIC_SECRET, "image_path": SYNTHETIC_SECRET, "result_mode": "files", "mode": "single_async"}),
+        ),
+    ] {
+        let response = timeout(
+            DEADLINE,
+            client.call_tool_once(
+                CallToolRequestParams::new(name)
+                    .with_arguments(arguments.as_object().unwrap().clone()),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let CallToolResponse::Complete(result) = response else {
+            panic!("invalid mode must return a complete error");
+        };
+        let metadata = result.structured_content.unwrap();
+        assert_eq!(metadata["code"], "invalid_parameters");
+        assert_eq!(metadata["submission"], "not_submitted");
+    }
 
     let response = timeout(
         DEADLINE,
@@ -247,6 +298,42 @@ async fn check_protocol_lifecycle(
     }
     let stderr = String::from_utf8(stderr_task.await.unwrap()).unwrap();
     assert!(!stderr.contains(SYNTHETIC_SECRET));
+    assert!(!stderr.contains(directory.path().to_str().unwrap()));
+    let events: Vec<serde_json::Value> = stderr
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|event| event["diagnostic"] == "tokemula_image_performance")
+        .collect();
+    let starts: Vec<_> = events
+        .iter()
+        .filter(|event| event["stage"] == "operation_start")
+        .collect();
+    assert_eq!(starts.len(), 4);
+    for start in starts {
+        let operation: Vec<_> = events
+            .iter()
+            .filter(|event| event["operation_id"] == start["operation_id"])
+            .collect();
+        let terminal = operation.last().unwrap();
+        assert_eq!(terminal["stage"], "operation_end");
+        assert_eq!(terminal["status"], "error");
+        assert_eq!(terminal["submission"], "not_submitted");
+        assert!(
+            operation
+                .iter()
+                .all(|event| event["start_unix_ms"] == start["start_unix_ms"])
+        );
+        assert!(
+            operation
+                .windows(2)
+                .all(|pair| pair[1]["elapsed_ms"].as_u64() >= pair[0]["elapsed_ms"].as_u64())
+        );
+        assert!(
+            operation
+                .iter()
+                .all(|event| event.get("path").is_none() && event.get("prompt").is_none())
+        );
+    }
 }
 
 #[tokio::test]

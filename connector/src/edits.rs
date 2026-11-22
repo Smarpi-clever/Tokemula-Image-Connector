@@ -284,6 +284,7 @@ impl ImageClient {
         let mut selected = None;
         let mut chosen_priority = None;
         let mut selected_error = None;
+        let mut construction_count = 0;
         for (index, model) in catalog.models().iter().enumerate() {
             let request = SelectionRequest {
                 model_id: Some(&model.id),
@@ -303,6 +304,11 @@ impl ImageClient {
                 files.validate(edit, &details)?;
                 let resolved =
                     input.for_capability(&model.capabilities[capability_index].parameters)?;
+                construction_count += 1;
+                self.counts(
+                    "candidate_construct_start",
+                    &[("construction_count", construction_count)],
+                );
                 let builder = self
                     .api
                     .post(
@@ -342,6 +348,13 @@ impl ImageClient {
                 Err(_) => {}
             }
         }
+        self.counts(
+            "candidate_counts",
+            &[
+                ("candidate_count", catalog.models().len()),
+                ("construction_count", construction_count),
+            ],
+        );
         if let Some(selected) = selected {
             return Ok(selected);
         }

@@ -2,18 +2,18 @@
 
 ## 快速安装（Mac M 系列）
 
-在终端选择一个客户端运行。安装器固定下载 [GitHub Release `v0.1.0-wb1.5`](https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/tag/v0.1.0-wb1.5) 的原生程序，先校验归档，再调用现有 `setup` 验签安装，最后注册 MCP 与 Skill。
+在终端选择一个客户端运行。安装器固定下载 [GitHub Release `v0.1.0-wb1.6`](https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/tag/v0.1.0-wb1.6) 的原生程序，先校验归档，再调用现有 `setup` 验签安装，最后注册 MCP 与 Skill。
 
 Codex App / CLI：
 
 ```sh
-curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.5/install.sh | sh -s -- --harness codex
+curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.6/install.sh | sh -s -- --harness codex
 ```
 
 WorkBuddy AI 5.11.4：
 
 ```sh
-curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.5/install.sh | sh -s -- --harness workbuddy
+curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.6/install.sh | sh -s -- --harness workbuddy
 ```
 
 安装脚本源码见 [`packaging/install.sh`](../packaging/install.sh)。它只使用 macOS 自带工具，不需要 Node、Rust 或 Python，不更改 PATH 或编程 Provider。已有同版安装会复用；其他版本或待恢复安装会给出明确提示，继续使用原版本管理入口。

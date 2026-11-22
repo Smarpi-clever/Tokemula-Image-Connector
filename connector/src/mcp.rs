@@ -5,6 +5,7 @@ use crate::{
     http::{BatchProgress, CallError, ImageClient, RequestProgress, Submission},
     image_view::{self, ImageView},
     output::{OutputCache, PersistentOutput},
+    performance::OperationTrace,
     settings::SettingsService,
     tasks::TaskStore,
 };
@@ -38,6 +39,14 @@ pub enum ImageMode {
     SingleAsync,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageResultMode {
+    #[default]
+    Inline,
+    Files,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, serde::Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageComplexity {
@@ -57,6 +66,10 @@ impl ImageComplexity {
 
 #[derive(Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("not" = {
+    "required": ["result_mode", "mode"],
+    "properties": {"result_mode": {"const": "files"}, "mode": {"const": "single_async"}}
+}))]
 pub struct GenerateInput {
     /// 图片生成或编辑的具体要求。
     pub prompt: String,
@@ -72,10 +85,16 @@ pub struct GenerateInput {
     pub n: Option<u32>,
     /// 执行方式，省略时同步；single_async 立即返回任务引用。
     pub mode: Option<ImageMode>,
+    /// MCP交付方式；省略/inline保持内联图，files仅同步且需macOS产品的持久原图输出。不会传给图片上游。
+    pub result_mode: Option<ImageResultMode>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("not" = {
+    "required": ["result_mode", "mode"],
+    "properties": {"result_mode": {"const": "files"}, "mode": {"const": "single_async"}}
+}))]
 pub struct EditInput {
     pub prompt: String,
     pub model: Option<String>,
@@ -88,6 +107,8 @@ pub struct EditInput {
     pub n: Option<u32>,
     /// 执行方式，省略时同步；single_async 立即返回任务引用。
     pub mode: Option<ImageMode>,
+    /// MCP交付方式；省略/inline保持内联图，files仅同步且需macOS产品的持久原图输出。不会传给图片上游。
+    pub result_mode: Option<ImageResultMode>,
     /// 用户明确提供的单个本地绝对路径，与 image_paths 二选一。
     pub image_path: Option<String>,
     /// 有顺序的本地绝对路径；只读取这些文件，与 image_path 二选一。
@@ -231,6 +252,34 @@ impl ImageMcp {
         self.client.with_operation_context(context)
     }
 
+    async fn operation_client_traced(
+        &self,
+        trace: &OperationTrace,
+    ) -> Result<ImageClient, CallError> {
+        let Some(settings) = self.settings.clone() else {
+            return Ok(self.client.with_trace(trace.clone()));
+        };
+        trace.mark("snapshot_dispatched");
+        let blocking_trace = trace.clone();
+        let context = tokio::task::spawn_blocking(move || {
+            blocking_trace.mark("snapshot_blocking_enter");
+            settings.snapshot_traced(&blocking_trace)
+        })
+        .await
+        .map_err(|_| {
+            CallError::new(
+                "settings_unavailable",
+                "无法读取图片连接设置。",
+                Submission::NotSubmitted,
+            )
+        })?
+        .map_err(settings_error)?;
+        Ok(self
+            .client
+            .with_operation_context(context)?
+            .with_trace(trace.clone()))
+    }
+
     async fn configuration_status(&self) -> Value {
         let Some(settings) = self.settings.clone() else {
             return serde_json::json!({"source":"explicit_injection","management":"not_attached"});
@@ -273,6 +322,30 @@ impl ImageMcp {
             output.preflight()?;
         }
         Ok(())
+    }
+
+    fn preflight_delivery(
+        &self,
+        mode: Option<ImageMode>,
+        result_mode: ImageResultMode,
+    ) -> Result<(), CallError> {
+        if result_mode == ImageResultMode::Files {
+            if matches!(mode, Some(ImageMode::SingleAsync)) {
+                return Err(CallError::new(
+                    "invalid_parameters",
+                    "文件交付仅支持同步生成或编辑。",
+                    Submission::NotSubmitted,
+                ));
+            }
+            if self.persistent_output.is_none() {
+                return Err(CallError::new(
+                    "image_storage_unavailable",
+                    "文件交付需要已启用的持久原图输出。",
+                    Submission::NotSubmitted,
+                ));
+            }
+        }
+        self.preflight_output()
     }
 
     #[cfg(test)]
@@ -546,43 +619,65 @@ impl ImageMcp {
         bounded(result, &context.id, Submission::NotSubmitted)
     }
 
-    #[tool(input_schema = rmcp::handler::server::common::schema_for_input::<GenerateInput>().expect("input schema"), description = "生成图片，尺寸和画质沿用对应操作/模式的已存偏好，单次参数可覆盖；支持的图片思考复杂度默认 medium。默认同步；mode=single_async 受理后立即返回任务引用。先查询目录并校验，再提交一次可能收费的请求。超时、断线或取消只停止等待；不自动重发。")]
+    #[tool(input_schema = rmcp::handler::server::common::schema_for_input::<GenerateInput>().expect("input schema"), description = "生成图片，尺寸和画质沿用对应操作/模式的已存偏好，单次参数可覆盖；支持的图片思考复杂度默认 medium。默认同步；mode=single_async 受理后立即返回任务引用。result_mode=files仅同步且需持久原图输出，省略保持内联。先查询目录并校验，再提交一次可能收费的请求。超时、断线或取消只停止等待；不自动重发。")]
     async fn generate_image(
         &self,
         Parameters(arguments): Parameters<Value>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
+        let trace = OperationTrace::new("generate_image");
+        trace.mark("parameters_start");
         let Ok(input) = serde_json::from_value::<GenerateInput>(arguments) else {
+            trace.finish("error", Submission::NotSubmitted, "invalid_parameters");
             return invalid_parameters();
         };
-        if let Err(error) = self.preflight_output() {
-            return failure(error);
+        trace.mark("parameters_end");
+        let result_mode = input.result_mode.unwrap_or_default();
+        trace.mark("desktop_preflight_start");
+        if let Err(error) = self.preflight_delivery(input.mode, result_mode) {
+            return traced_failure(&trace, error);
         }
+        trace.mark("desktop_preflight_end");
+        trace.mark("cache_cleanup_start");
         self.cleanup_outputs();
-        let client = match self.operation_client().await {
+        trace.mark("cache_cleanup_end");
+        let client = match self.operation_client_traced(&trace).await {
             Ok(client) => client,
-            Err(error) => return failure(error),
+            Err(error) => return traced_failure(&trace, error),
         };
         let progress = RequestProgress::default();
         tokio::select! {
             biased;
-            _ = context.ct.cancelled() => failure(progress.cancelled()),
-            result = client.execute(&input, None, &progress) => self.render(result, &context.id, image_view::supported(context.client_capabilities()))
+            _ = context.ct.cancelled() => traced_failure(&trace, progress.cancelled()),
+            result = client.execute(&input, None, &progress) => self.render_traced(
+                result,
+                &context.id,
+                image_view::supported(context.client_capabilities()),
+                result_mode,
+                &trace,
+            )
         }
     }
 
-    #[tool(input_schema = rmcp::handler::server::common::schema_for_input::<EditInput>().expect("input schema"), description = "按目录能力编辑图片：image_path 或有序 image_paths 二选一，可选 mask 作用于第一图。默认同步，single_async 立即返回任务引用；尺寸画质沿用对应偏好，支持的图片思考复杂度默认 medium。只读取指定文件，完整校验后提交一次；停止等待不重新生成。")]
+    #[tool(input_schema = rmcp::handler::server::common::schema_for_input::<EditInput>().expect("input schema"), description = "按目录能力编辑图片：image_path 或有序 image_paths 二选一，可选 mask 作用于第一图。默认同步，single_async 立即返回任务引用；result_mode=files仅同步且需持久原图输出，省略保持内联。尺寸画质沿用对应偏好，支持的图片思考复杂度默认 medium。只读取指定文件，完整校验后提交一次；停止等待不重新生成。")]
     async fn edit_image(
         &self,
         Parameters(arguments): Parameters<Value>,
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
+        let trace = OperationTrace::new("edit_image");
+        trace.mark("parameters_start");
         let Ok(input) = serde_json::from_value::<EditInput>(arguments) else {
+            trace.finish("error", Submission::NotSubmitted, "invalid_parameters");
             return invalid_parameters();
         };
-        if let Err(error) = self.preflight_output() {
-            return failure(error);
+        trace.mark("parameters_end");
+        let result_mode = input.result_mode.unwrap_or_default();
+        trace.mark("desktop_preflight_start");
+        if let Err(error) = self.preflight_delivery(input.mode, result_mode) {
+            return traced_failure(&trace, error);
         }
+        trace.mark("desktop_preflight_end");
         let request = GenerateInput {
             prompt: input.prompt.clone(),
             model: input.model.clone(),
@@ -591,17 +686,26 @@ impl ImageMcp {
             complexity: input.complexity,
             n: input.n,
             mode: input.mode,
+            result_mode: input.result_mode,
         };
+        trace.mark("cache_cleanup_start");
         self.cleanup_outputs();
-        let client = match self.operation_client().await {
+        trace.mark("cache_cleanup_end");
+        let client = match self.operation_client_traced(&trace).await {
             Ok(client) => client,
-            Err(error) => return failure(error),
+            Err(error) => return traced_failure(&trace, error),
         };
         let progress = RequestProgress::default();
         tokio::select! {
             biased;
-            _ = context.ct.cancelled() => failure(progress.cancelled()),
-            result = client.execute(&request, Some(&input), &progress) => self.render(result, &context.id, image_view::supported(context.client_capabilities()))
+            _ = context.ct.cancelled() => traced_failure(&trace, progress.cancelled()),
+            result = client.execute(&request, Some(&input), &progress) => self.render_traced(
+                result,
+                &context.id,
+                image_view::supported(context.client_capabilities()),
+                result_mode,
+                &trace,
+            )
         }
     }
 }
@@ -681,6 +785,19 @@ fn settings_error(error: crate::settings::SettingsError) -> CallError {
     CallError::new(error.code, error.message, Submission::NotSubmitted)
 }
 
+fn traced_failure(trace: &OperationTrace, error: CallError) -> CallToolResult {
+    trace.finish(
+        if error.code == "cancelled" {
+            "cancelled"
+        } else {
+            "error"
+        },
+        error.submission,
+        error.code,
+    );
+    failure(error)
+}
+
 fn failure(error: CallError) -> CallToolResult {
     CallToolResult::structured_error(serde_json::to_value(error).expect("serializable tool error"))
 }
@@ -758,11 +875,63 @@ fn image_delivery_failure(error: CallError, metadata: &Value) -> CallToolResult 
 }
 
 impl ImageMcp {
+    fn render_traced(
+        &self,
+        result: Result<crate::http::ImageOutput, CallError>,
+        id: &RequestId,
+        inline_ui: bool,
+        result_mode: ImageResultMode,
+        trace: &OperationTrace,
+    ) -> CallToolResult {
+        let output = match result {
+            Ok(output) => output,
+            Err(error) => {
+                let submission = error.submission;
+                trace.finish("error", submission, error.code);
+                return bounded(failure(error), id, submission);
+            }
+        };
+        trace.mark("render_start");
+        let response = self.render_with_mode(Ok(output), id, inline_ui, result_mode, Some(trace));
+        if response.is_error == Some(true) {
+            let metadata = response
+                .structured_content
+                .as_ref()
+                .expect("tool error metadata");
+            let submission = serde_json::from_value(metadata["submission"].clone())
+                .expect("validated submission state");
+            let code = match metadata["code"].as_str() {
+                Some("image_storage_failed") => "image_storage_failed",
+                Some("preview_failed") => "preview_failed",
+                Some("image_view_unavailable") => "image_view_unavailable",
+                Some("image_storage_unavailable") => "image_storage_unavailable",
+                Some("response_too_large") => "response_too_large",
+                _ => "delivery_failed",
+            };
+            trace.finish("error", submission, code);
+        } else {
+            trace.mark("render_return");
+            trace.finish("success", Submission::Accepted, "ok");
+        }
+        response
+    }
+
     fn render(
         &self,
         result: Result<crate::http::ImageOutput, CallError>,
         id: &RequestId,
         inline_ui: bool,
+    ) -> CallToolResult {
+        self.render_with_mode(result, id, inline_ui, ImageResultMode::Inline, None)
+    }
+
+    fn render_with_mode(
+        &self,
+        result: Result<crate::http::ImageOutput, CallError>,
+        id: &RequestId,
+        inline_ui: bool,
+        result_mode: ImageResultMode,
+        trace: Option<&OperationTrace>,
     ) -> CallToolResult {
         let mut output = match result {
             Ok(output) => output,
@@ -780,6 +949,9 @@ impl ImageMcp {
         }
         let inline_ui = inline_ui && self.persistent_output.is_none();
         let mut desktop_paths: Vec<Value> = Vec::new();
+        if let Some(trace) = trace {
+            trace.mark("original_save_start");
+        }
         if let Some(destination) = &self.persistent_output {
             for (index, (bytes, mime)) in output.images.iter().enumerate() {
                 let path = match destination.save(bytes, mime) {
@@ -807,10 +979,13 @@ impl ImageMcp {
                     "persistent": true,
                     "retention": "user_managed",
                     "expires_at": null,
-                    "inline_representation": "original"
+                    "inline_representation": if result_mode == ImageResultMode::Files { "none" } else { "original" }
                 }));
             }
             output.metadata["local_files"] = serde_json::json!(desktop_paths);
+        }
+        if let Some(trace) = trace {
+            trace.counts("original_save_end", &[("image_count", desktop_paths.len())]);
         }
         let caption = if output.metadata["batch_id"].is_string() {
             "图片已返回；任务状态见结果信息。"
@@ -840,16 +1015,51 @@ impl ImageMcp {
                 file["path"].as_str().expect("saved path")
             ));
         }
+        if result_mode == ImageResultMode::Files {
+            let mut result = CallToolResult::success(vec![ContentBlock::text(caption)]);
+            result.structured_content = Some(output.metadata);
+            if let Some(trace) = trace {
+                trace.counts(
+                    "image_encoding_skipped",
+                    &[("image_count", output.images.len())],
+                );
+                trace.mark("message_measure_start");
+            }
+            let result = bounded(result, id, Submission::Accepted);
+            if let Some(trace) = trace {
+                trace.mark("message_measure_end");
+            }
+            return result;
+        }
+        if let Some(trace) = trace {
+            trace.mark("image_encoding_start");
+        }
         let content = output
             .images
             .iter()
             .map(|(bytes, mime)| ContentBlock::image(STANDARD.encode(bytes), *mime))
             .chain(std::iter::once(ContentBlock::text(caption)))
             .collect();
+        if let Some(trace) = trace {
+            trace.counts(
+                "image_encoding_end",
+                &[("image_count", output.images.len())],
+            );
+        }
         let mut result = CallToolResult::success(content);
         result.structured_content = Some(output.metadata);
         let mut previews = vec![false; output.images.len()];
-        while wire_bytes(&result, id) > MAX_WIRE_BYTES {
+        loop {
+            if let Some(trace) = trace {
+                trace.mark("message_measure_start");
+            }
+            let bytes = wire_bytes(&result, id);
+            if let Some(trace) = trace {
+                trace.counts("message_measure_end", &[("wire_bytes", bytes)]);
+            }
+            if bytes <= MAX_WIRE_BYTES {
+                break;
+            }
             let Some(index) = output
                 .images
                 .iter()
@@ -861,6 +1071,9 @@ impl ImageMcp {
                 return bounded(result, id, Submission::Unknown);
             };
             if self.persistent_output.is_some() {
+                if let Some(trace) = trace {
+                    trace.mark("preview_encoding_start");
+                }
                 let mut preview = Cursor::new(Vec::new());
                 let decoded = image::load_from_memory(&output.images[index].0)
                     .expect("HTTP boundary validated image bytes");
@@ -880,6 +1093,9 @@ impl ImageMcp {
                 }
                 result.content[index] =
                     ContentBlock::image(STANDARD.encode(preview.into_inner()), "image/png");
+                if let Some(trace) = trace {
+                    trace.mark("preview_encoding_end");
+                }
                 result.structured_content.as_mut().expect("image metadata")["local_files"][index]
                     ["inline_representation"] = serde_json::json!("preview");
                 result.content.push(ContentBlock::text(format!(
@@ -891,6 +1107,9 @@ impl ImageMcp {
             }
             if inline_ui {
                 let (bytes, mime) = (&output.images[index].0, output.images[index].1);
+                if let Some(trace) = trace {
+                    trace.mark("preview_encoding_start");
+                }
                 let mut preview = Cursor::new(Vec::new());
                 let decoded =
                     image::load_from_memory(bytes).expect("HTTP boundary validated image bytes");
@@ -910,6 +1129,9 @@ impl ImageMcp {
                 }
                 result.content[index] =
                     ContentBlock::image(STANDARD.encode(preview.into_inner()), "image/png");
+                if let Some(trace) = trace {
+                    trace.mark("preview_encoding_end");
+                }
                 let original = std::mem::take(&mut output.images[index].0);
                 let descriptor = match self.image_view.retain(original, mime, index) {
                     Ok(descriptor) => descriptor,
@@ -947,6 +1169,9 @@ impl ImageMcp {
                 ));
             };
             let (bytes, mime) = &output.images[index];
+            if let Some(trace) = trace {
+                trace.mark("cache_original_save_start");
+            }
             let original = match cache.save(bytes, mime, SystemTime::now()) {
                 Ok(original) => original,
                 Err(error) => {
@@ -956,6 +1181,10 @@ impl ImageMcp {
                     ));
                 }
             };
+            if let Some(trace) = trace {
+                trace.mark("cache_original_save_end");
+                trace.mark("preview_encoding_start");
+            }
             let mut preview = Cursor::new(Vec::new());
             let decoded =
                 image::load_from_memory(bytes).expect("HTTP boundary validated image bytes");
@@ -975,6 +1204,9 @@ impl ImageMcp {
             }
             result.content[index] =
                 ContentBlock::image(STANDARD.encode(preview.into_inner()), "image/png");
+            if let Some(trace) = trace {
+                trace.mark("preview_encoding_end");
+            }
             result.content.push(ContentBlock::text(format!(
                 "第 {} 张为预览。完整原图：{}；本地有效至 Unix 秒 {}，请在到期前另存。",
                 index + 1,

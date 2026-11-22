@@ -676,6 +676,7 @@ async fn both_protocols_discover_and_generate_through_http_with_correct_metadata
                 "n",
                 "prompt",
                 "quality",
+                "result_mode",
                 "size"
             ]
         );
@@ -915,6 +916,7 @@ async fn http_errors_and_parser_failures_have_safe_stable_diagnostics() {
                     complexity: None,
                     n: None,
                     mode: None,
+                    result_mode: None,
                 },
                 None,
                 &RequestProgress::default(),
@@ -1083,6 +1085,7 @@ async fn cancellation_after_server_headers_retains_reference() {
         complexity: None,
         n: None,
         mode: None,
+        result_mode: None,
     };
     let progress = RequestProgress::default();
     {
@@ -1282,6 +1285,10 @@ async fn persistent_output_preflight_blocks_generation_edit_and_batch_before_any
     for (tool, args) in [
         ("generate_image", json!({"prompt":"synthetic"})),
         (
+            "generate_image",
+            json!({"prompt":"synthetic", "result_mode":"files"}),
+        ),
+        (
             "edit_image",
             json!({"prompt":"synthetic","image_path":"/synthetic/input.png"}),
         ),
@@ -1300,4 +1307,191 @@ async fn persistent_output_preflight_blocks_generation_edit_and_batch_before_any
     assert_eq!(fixture.state.fees.load(Ordering::SeqCst), 0);
     client.cancel().await.unwrap();
     task.await.unwrap();
+}
+
+#[tokio::test]
+async fn dual_sources_prefer_nonempty_b64_and_never_fallback_on_damaged_data() {
+    let fixture = Fixture::new().await;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let router = Router::new()
+        .route(
+            "/image",
+            get(
+                |State((seen, bytes)): State<DownloadState>, request: Request| async move {
+                    seen.lock()
+                        .unwrap()
+                        .push(request.headers().contains_key("authorization"));
+                    bytes
+                },
+            ),
+        )
+        .with_state((seen.clone(), fixture.state.png.clone()));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/image", listener.local_addr().unwrap());
+    let download = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let (client, server) = connect(fixture.client(Duration::from_secs(2)), false).await;
+    let encoded = STANDARD.encode(&fixture.state.png);
+    let cases = [
+        (Some(encoded.as_str()), true, false),
+        (None, true, true),
+        (Some(""), true, true),
+        (Some(" \t\n"), true, true),
+        (Some("not-valid-base64"), false, false),
+        (Some("bm90IGFuIGltYWdl"), false, false),
+    ];
+    let mut downloads = 0;
+    for (index, (b64, success, needs_download)) in cases.into_iter().enumerate() {
+        let mut item = json!({"url":url});
+        if let Some(encoded) = b64 {
+            item["b64_json"] = json!(encoded);
+        }
+        *fixture.state.mode.lock().unwrap() = Mode::Error(StatusCode::OK, json!({"data":[item]}));
+        let result = call(&client, "generate_image", json!({"prompt":SENSITIVE})).await;
+        if success {
+            assert_image(&result);
+        } else {
+            assert_eq!(metadata(&result)["code"], "invalid_image");
+            assert_eq!(metadata(&result)["submission"], "unknown");
+            assert_eq!(metadata(&result)["request_ref"], "fixture-request");
+            let visible = serde_json::to_string(&result).unwrap();
+            assert!(!visible.contains("not-valid-base64"));
+            assert!(!visible.contains("bm90IGFuIGltYWdl"));
+        }
+        downloads += usize::from(needs_download);
+        assert_eq!(seen.lock().unwrap().len(), downloads);
+        assert!(seen.lock().unwrap().iter().all(|has_auth| !has_auth));
+        assert_eq!(fixture.count(), index + 1);
+    }
+    close(client, server).await;
+    download.abort();
+}
+
+#[tokio::test]
+async fn traced_http_stages_use_only_safe_fields_and_count_actual_constructions() {
+    let fixture = Fixture::new().await;
+    let trace = crate::performance::OperationTrace::new("synthetic");
+    let input = serde_json::from_value(json!({"prompt":SENSITIVE})).unwrap();
+    fixture
+        .client(Duration::from_secs(2))
+        .with_trace(trace.clone())
+        .execute(&input, None, &RequestProgress::default())
+        .await
+        .unwrap();
+    trace.finish("success", Submission::Accepted, "ok");
+    let events = trace.events();
+    let stages: Vec<_> = events
+        .iter()
+        .map(|event| event["stage"].as_str().unwrap())
+        .collect();
+    for required in [
+        "catalog_get_start",
+        "catalog_headers",
+        "catalog_body_complete",
+        "catalog_json_complete",
+        "catalog_validation_complete",
+        "candidate_selection_start",
+        "candidate_counts",
+        "candidate_selection_complete",
+        "image_post_start",
+        "image_post_headers",
+        "image_post_body_complete",
+        "image_post_json_complete",
+        "image_source_b64",
+        "image_decode_complete",
+        "image_validation_complete",
+        "operation_end",
+    ] {
+        assert!(stages.contains(&required), "missing {required}");
+    }
+    let counts = events
+        .iter()
+        .find(|event| event["stage"] == "candidate_counts")
+        .unwrap();
+    assert!(
+        counts["candidate_count"].as_u64().unwrap()
+            >= counts["construction_count"].as_u64().unwrap()
+    );
+    assert!(counts["construction_count"].as_u64().unwrap() > 0);
+    let visible = serde_json::to_string(&events).unwrap();
+    for sensitive in [
+        KEY,
+        SENSITIVE,
+        &fixture.base,
+        "fixture-request",
+        "Authorization",
+        "b64_json",
+    ] {
+        assert!(!visible.contains(sensitive));
+    }
+    assert_eq!(fixture.count(), 1);
+}
+
+#[tokio::test]
+async fn files_delivery_is_explicit_sync_only_and_never_sent_upstream() {
+    let fixture = Fixture::new().await;
+    let (client, server) = connect(fixture.client(Duration::from_secs(2)), false).await;
+    for args in [
+        json!({"prompt":"synthetic", "result_mode":"files"}),
+        json!({"prompt":"synthetic", "result_mode":"files", "mode":"single_async"}),
+        json!({"prompt":"synthetic", "result_mode":"invalid"}),
+    ] {
+        let result = call(&client, "generate_image", args).await;
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(metadata(&result)["submission"], "not_submitted");
+        assert_eq!(fixture.count(), 0);
+    }
+    close(client, server).await;
+    let directory = tempfile::tempdir().unwrap();
+    let input_path = directory.path().join("参考 图.png");
+    std::fs::write(&input_path, &fixture.state.png).unwrap();
+    let mcp = ImageMcp::with_directories(
+        fixture.client(Duration::from_secs(2)),
+        directory.path().join("cache"),
+        directory.path().join("tasks"),
+    )
+    .with_persistent_output_for_tests(directory.path().join("桌面 空格/Tokemula-Images"));
+    std::fs::create_dir_all(directory.path().join("桌面 空格")).unwrap();
+    let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+    let server = tokio::spawn(async move {
+        mcp.serve(server_io).await.unwrap().waiting().await.unwrap();
+    });
+    let client = ClientConfig::default()
+        .with_protocol_version(ProtocolVersion::V_2025_11_25)
+        .serve(client_io)
+        .await
+        .unwrap();
+    for (tool, args) in [
+        (
+            "generate_image",
+            json!({"prompt":"synthetic", "result_mode":"files"}),
+        ),
+        (
+            "edit_image",
+            json!({"prompt":"synthetic", "result_mode":"files", "image_path":input_path}),
+        ),
+    ] {
+        let result = call(&client, tool, args).await;
+        assert_ne!(result.is_error, Some(true));
+        assert!(
+            result
+                .content
+                .iter()
+                .all(|content| !matches!(content, rmcp::model::ContentBlock::Image(_)))
+        );
+        let file = &metadata(&result)["local_files"][0];
+        assert_eq!(
+            std::fs::read(file["path"].as_str().unwrap()).unwrap(),
+            fixture.state.png
+        );
+        assert_eq!(file["inline_representation"], "none");
+    }
+    let records = fixture.state.records.lock().unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(
+        records
+            .iter()
+            .all(|record| record.fields.get("result_mode").is_none())
+    );
+    drop(records);
+    close(client, server).await;
 }

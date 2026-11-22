@@ -116,6 +116,7 @@ async fn synthetic_image_completes_once_while_installed_pair_switches() {
         complexity: None,
         n: Some(1),
         mode: None,
+        result_mode: None,
     };
     let progress = RequestProgress::default();
     let image_request =

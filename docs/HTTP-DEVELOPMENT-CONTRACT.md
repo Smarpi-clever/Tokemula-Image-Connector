@@ -28,7 +28,7 @@ B1 的 `Catalog`、`SelectionRequest`、`FeeReceipt` 继续供离线调用者直
 
 成功图片响应的HTTP读取预算按本次已通过能力校验的n计算：每张20MiB原图的base64上界（4×ceil(bytes/3)），另加每张16KiB记录开销和整体1MiB JSON元信息余量。目录和错误体继续各自限制为64MiB；不会把图片数量变化放宽到这些非图片响应。单图解码后仍校验20MiB与像素上限。
 
-成功响应沿现有 Images 格式：`data` 数组，每项是 `b64_json` 或 `url`（二选一），可带 `expires_at`（Unix 秒，未给则远程期限未知）。HTTP 头 `X-Client-Request-ID` 是关联引用。可选顶层 `model` 表示服务端提供的客户可见实际模型，不自行用选择值冒充该信息。
+成功响应沿现有 Images 格式：`data` 数组，每项可提供 `b64_json`、`url` 或二者，可带 `expires_at`（Unix 秒，未给则远程期限未知）。非空 `b64_json` 优先解码并完成图片验证；缺失、空串或全空白时才使用有效 URL。损坏的非空 b64 或解码后的非图片如实失败，不转用 URL、不重投。该共享解析同时用于同步生成/编辑及单异步完成取图。HTTP 头 `X-Client-Request-ID` 是关联引用。可选顶层 `model` 表示服务端提供的客户可见实际模型，不自行用选择值冒充该信息。
 
 返回 MCP image 与结构化元信息（selected_model、effective_model/source、状态与request_ref），图片格式由实际内容验证。URL 用独立、无 Authorization 的 HTTP client 下载，下载重定向同样不携带 API 凭据；URL 不写入工具诊断。远端到期时间单列，未知为 null，不从它推导本地文件期限。
 
@@ -36,11 +36,25 @@ B1 的 `Catalog`、`SelectionRequest`、`FeeReceipt` 继续供离线调用者直
 
 独立 MCP 的 `for_current_user()` 产品入口把每张已取得的完整原图保存到当前用户 `Desktop/Tokemula-Images`，解析桌面真实父路径以跟随用户符号链接/iCloud 桌面；不修改桌面或已有目录权限。生成、编辑及批量提交在读取操作设置/发出收费 POST 前创建一次写入探针，无法写入时返回 `image_storage_unavailable`、`not_submitted`，不改目录或重投。保存后才返回路径；写入结果失败返回 `image_storage_failed`、`accepted` 并保留原请求/任务引用及已保存的本次文件路径。
 
-图片字节、格式和尺寸保持原样。文件名使用独立随机名称，编辑和多图不覆盖输入或先前产物。`local_files` 按本次图片顺序返回 `image_index`、绝对 `path`、`mime_type`、`width`、`height`，并使用 `persistent=true`、`retention="user_managed"`、`expires_at=null` 表示无自动过期；不把旧临时 `expires_at` 语义改成虚假远期时间。`content.text` 同时给出每张完整绝对路径，使模型直接消费，`inline_representation` 区分协议图块是 `original` 或 `preview`。
+图片字节、格式和尺寸保持原样。文件名使用独立随机名称，编辑和多图不覆盖输入或先前产物。`local_files` 按本次图片顺序返回 `image_index`、绝对 `path`、`mime_type`、`width`、`height`，并使用 `persistent=true`、`retention="user_managed"`、`expires_at=null` 表示无自动过期；不把旧临时 `expires_at` 语义改成虚假远期时间。`content.text` 同时给出每张完整绝对路径，使模型直接消费，`inline_representation` 区分协议图块是 `original`、`preview` 或显式文件交付的 `none`。
 
-消息预算仍为按 SDK 官方类型序列化的 8 MiB（含 request ID、全部图片和元信息）。小图保持原 ImageContent；超预算逐个换为 256 像素内 PNG 预览，完整原图已经保存，仍展示同一次持久路径，不再另写缓存或创建 10 分钟内存资源。此产品路径不声明 MCP Apps 工具 UI，WorkBuddy 由配套 Skill 发现并调用原生 `present_files`，`files` 使用本次路径，`cwd` 为任务工作目录；首图自动打开，聊天保留同一文件入口。Codex沿原生图片交付方式使用原图及其绝对路径。
+消息预算仍为按 SDK 官方类型序列化的 8 MiB（含 request ID、全部图片和元信息）。小图保持原 ImageContent；超预算逐个换为 256 像素内 PNG 预览，完整原图已经保存，仍展示同一次持久路径，不再另写缓存或创建 10 分钟内存资源。此产品路径不声明 MCP Apps 工具 UI。WorkBuddy 配套 Skill 默认直接在正文嵌入本次原图并保留同一文件入口，不先调用 `present_files` 或自动打开侧栏；用户明确要求打开时再用原生展示，`files` 为本次原始路径，`cwd` 为任务目录。Codex沿原生图片交付方式使用原图及其绝对路径。
 
 桌面图是用户产物，重启、升级、缓存清理以及卸载（包括 purge）均不删除。用户移动、改名或删除文件后，旧路径失效，展示/编辑应报告真实路径状态，不重新生成或替换为其他图片。
+
+### 同步调用的显式文件交付
+
+`generate_image` 和 `edit_image` 接受可选 `result_mode=inline|files`，仅控制 MCP 返回方式，不传图片上游、不写用户偏好。省略或 `inline` 保持上述图块与 8 MiB 完整消息策略。
+
+`files` 只适用于同步调用，并要求服务已有可用的持久输出；缺少持久能力、目录不可写或与 `single_async` 组合均在图片 POST 前失败，保持 `not_submitted`。完整原图照常保存，text 和结构化 `local_files` 同时给出真实路径及原元信息，`inline_representation="none"`；不构造 base64 图块，不用先编码再删除的方式减重。保存失败保留真实状态、引用和已保存路径，不换目录、不重投。
+
+原异步、批量工具的输入、状态及分页条件保持。旧无持久输出的构造仍可省略该字段或选择 `inline`。WorkBuddy 配套源码 Skill 仅在新 schema 支持且 macOS 持久输出适用的同步调用中选择 `files`，随后直接用 `local-file://local/` 逐段编码的本次原路径在正文嵌图；默认不以 `present_files` 为前置。普通展示不重读全图，视觉分析按需读取。
+
+### 本地分段计时
+
+同步生成/编辑以同一操作 ID 在 stderr 输出非敏感阶段记录，stdout 保持 MCP 协议。开始时间使用 Unix 毫秒与宿主时间线对齐；`elapsed_ms` 相对操作起点，`delta_ms` 表示相邻标记间隔，嵌套区间不重复加总。
+
+阶段覆盖入口/前置、快照派发与 blocking/锁/存储读取、目录 GET 的头/body/校验、候选构造计数、图片 POST 的头/body/JSON、逐图来源/下载/解码/校验，以及原图保存、图块编码、完整消息计长和 render 返回。日志只含静态阶段、状态/错误码、时间、数量及字节；不记录 Key、prompt、URL、路径、请求头、图片/base64 或完整错误。成功、失败和取消记录最后阶段与真实提交状态。render 后的 stdio/宿主消费仍在外部未拆分区间，历史 914 秒不补猜分段值。
 
 ### 原有构造与非 macOS 兼容交付
 
