@@ -4,20 +4,20 @@
 
 ## 快速开始
 
-当前下载版 [**0.1.0-wb1.5**](https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/tag/v0.1.0-wb1.5) 支持 **macOS Apple Silicon（M 系列）**。先安装 Codex App / CLI 或 WorkBuddy AI 5.11.4，再打开终端运行对应命令。
+当前下载版 [**0.1.0-wb1.6**](https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/tag/v0.1.0-wb1.6) 支持 **macOS Apple Silicon（M 系列）**。先安装 Codex App / CLI 或 WorkBuddy AI 5.11.4，再打开终端运行对应命令。
 
 ### 1. 安装并接入客户端
 
 **Codex App / CLI**
 
 ```sh
-curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.5/install.sh | sh -s -- --harness codex
+curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.6/install.sh | sh -s -- --harness codex
 ```
 
 **WorkBuddy**
 
 ```sh
-curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.5/install.sh | sh -s -- --harness workbuddy
+curl -fsSL https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v0.1.0-wb1.6/install.sh | sh -s -- --harness workbuddy
 ```
 
 命令会下载原生程序、自动校验、安装 MCP 与 Skill，并保留其他 MCP、编程 Provider 和已有设置。无需 Node、Rust 或 Python。安装脚本源码见 [`packaging/install.sh`](packaging/install.sh)。
@@ -34,15 +34,15 @@ AI 调用 `configure_tokemula` 后，打开返回的本机页面，填写自己�
 
 ### 3. 开始使用
 
-> 用 Tokemula 生成一张简洁插画：白色桌面上一盆仙人掌，旁边一个浅蓝色杯子，米白背景，无文字。完成后展示并提供可保存的原图。
+> 来张海边日落的图片。
 
-原图会自动保存在桌面的 **Tokemula-Images** 文件夹。WorkBuddy 在聊天正文直接显示本次原图，同时自动打开原生预览，并保留文件入口；Codex 沿用其图片展示方式并保留原图路径。
+原图会自动保存在桌面的 **Tokemula-Images** 文件夹。WorkBuddy 在聊天正文直接显示本次原图，保留同一原图的文件入口。需要打开时再提出要求。Codex 沿用其图片展示方式并保留原图路径。
 
 继续编辑时直接发送：
 
-> 用 Tokemula 编辑刚才那张图片：保留主体和构图，把背景改成浅桃色，在桌面左前方添加一片小绿叶，只输出一张。
+> 把刚才那张图片改一下：保留主体和构图，把背景改成浅桃色，在桌面左前方添加一片小绿叶，只输出一张。
 
-日常省略模型、尺寸和画质即可沿用默认设置。编辑结果另存新文件，不覆盖原图。图片长期保留，重启、升级和卸载都不会删除；回看旧聊天时，保持原文件的位置和名称。编辑其他已有图片时，可上传原图或提供完整路径。
+图片需求默认通过 Tokemula；明确指定其他图片服务或排除 Tokemula 时，按你的选择处理。Tokemula 不可用或失败时说明当前状态，不自动换服务。日常省略模型、尺寸和画质即可沿用默认设置。编辑结果另存新文件，不覆盖原图。图片长期保留，重启、升级和卸载都不会删除；回看旧聊天时，保持原文件的位置和名称。编辑其他已有图片时，可上传原图或提供完整路径。
 
 请求结果未知时，保留原引用，不重复提交。文件被移动或删除时报告路径失效，不拿旧图替代。
 

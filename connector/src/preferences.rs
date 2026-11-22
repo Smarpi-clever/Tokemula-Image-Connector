@@ -113,6 +113,7 @@ impl ImageClient {
         let mut best_priority = None;
         let mut alternatives = Vec::new();
         let mut exact_error = None;
+        let mut construction_count = 0;
         for (model_index, model) in catalog.models().iter().enumerate() {
             let candidate = (|| {
                 catalog.select(&SelectionRequest {
@@ -131,6 +132,11 @@ impl ImageClient {
                 let resolved =
                     input.for_capability(&model.capabilities[capability_index].parameters)?;
                 let input = &resolved;
+                construction_count += 1;
+                self.counts(
+                    "candidate_construct_start",
+                    &[("construction_count", construction_count)],
+                );
                 let mut body =
                     json!({"model":model.id,"prompt":input.prompt,"n":selection.image_count});
                 if let Some(complexity) = input.complexity {
@@ -181,6 +187,13 @@ impl ImageClient {
                 Err(_) => (),
             }
         }
+        self.counts(
+            "candidate_counts",
+            &[
+                ("candidate_count", catalog.models().len()),
+                ("construction_count", construction_count),
+            ],
+        );
         selected.ok_or_else(|| {
             if self.preferences.is_some() && exact.is_none() {
                 self.preference_error(catalog, alternatives)

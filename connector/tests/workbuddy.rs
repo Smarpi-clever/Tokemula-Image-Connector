@@ -374,17 +374,46 @@ fn boundaries_and_official_package_use_the_single_skill_without_secrets() {
         .next()
         .unwrap();
     for instruction in [
-        "宿主正常的保存或附件入口",
-        "请用户保存图片并上传",
-        "停止自动找图",
+        "宿主正常保存或附件入口",
+        "请用户保存并上传",
+        "此时停止展示",
         "会话数据库、内部日志或进程缓存",
         "不做全盘扫描",
         "不重新生成",
+        "直接在正文交付原图，默认不先调用 `present_files`",
+        "用户明确要求打开原图或侧栏时，再使用原生 `present_files`",
+        "不为展示而重读整张图片",
+        "用户需要视觉分析时再按需读图",
     ] {
         assert!(
             delivery.contains(instruction),
             "missing delivery guidance: {instruction}"
         );
+    }
+    for instruction in [
+        "macOS 桌面持久输出适用时",
+        "工具 schema 明确支持 `result_mode=files`",
+        "旧 schema、其他宿主和 `single_async` 沿用原行为",
+        "不得擅自转用内置 `ImageGen` 或其他服务",
+    ] {
+        assert!(SKILL_CONTENT.contains(instruction));
+    }
+    let frontmatter = SKILL_CONTENT
+        .strip_prefix("---\n")
+        .unwrap()
+        .split_once("\n---")
+        .unwrap()
+        .0;
+    let metadata: serde_yaml_ng::Value = serde_yaml_ng::from_str(frontmatter).unwrap();
+    assert_eq!(metadata["name"].as_str(), Some(REGISTRATION_NAME));
+    let description = metadata["description"].as_str().unwrap();
+    for rule in [
+        "只描述画面、未写“生成”或服务名的图片需求同样使用",
+        "生图默认必须通过 Tokemula MCP",
+        "仅用户明确排除 Tokemula 或指定其他图片服务时例外",
+        "提交批量图片任务、恢复任务结果",
+    ] {
+        assert!(description.contains(rule));
     }
     let f = Fixture::new();
     assert_eq!(

@@ -1108,3 +1108,34 @@ async fn regression_failed_reasons_are_static_allowlisted_and_keep_original_refe
     }
     close(client, server).await;
 }
+
+#[tokio::test]
+async fn completed_async_dual_sources_share_b64_precedence_and_no_fallback() {
+    let fixture = TaskFixture::new().await;
+    let directory = tempfile::tempdir().unwrap();
+    let (client, server) = connect_task(&fixture, &directory, false).await;
+    let mut downloads = 0;
+    for (b64, success, needs_download) in [
+        (STANDARD.encode(&fixture.common.png), true, false),
+        (" \t\n".into(), true, true),
+        ("damaged-encoding".into(), false, false),
+        (STANDARD.encode(b"not an image"), false, false),
+    ] {
+        let mut completed = fixture.completed();
+        completed["result"]["data"][0] = json!({"b64_json":b64,"url":fixture.download_url()});
+        fixture.set_task(completed);
+        let result = call(&client, "get_image_task", json!({"task_id":TASK_ID})).await;
+        if success {
+            assert_image(&result);
+        } else {
+            assert_eq!(metadata(&result)["code"], "invalid_image");
+            assert_eq!(metadata(&result)["request_ref"], ORIGINAL_REF);
+        }
+        downloads += usize::from(needs_download);
+        let auth = fixture.task_state.download_auth.lock().unwrap();
+        assert_eq!(auth.len(), downloads);
+        assert!(auth.iter().all(|has_auth| !has_auth));
+        assert_eq!(fixture.common.posts.load(Ordering::SeqCst), 0);
+    }
+    close(client, server).await;
+}

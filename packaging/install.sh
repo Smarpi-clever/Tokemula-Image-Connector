@@ -13,8 +13,8 @@ native() {
     fi
 }
 main() {
-    version='0.1.0-wb1.5'
-    digest='2713126a7e54fa26b25ba25b7c4bdeba666645ebb2cc662c7fa2c4839727b7e3'
+    version='0.1.0-wb1.6'
+    digest='d43f82e16d3d1be9f81a47e09f13eaf5306f032aaccecf4f54c063b5adde2b97'
     url="https://github.com/Smarpi-clever/Tokemula-Image-Connector/releases/download/v$version/tokemula-image-connector-$version-macos-arm64.tar.gz"
     harness=''; client=''; workbuddy_app=''
     while [ "$#" -gt 0 ]; do

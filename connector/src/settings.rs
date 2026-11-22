@@ -350,29 +350,53 @@ impl SettingsService {
     }
     /// Reads one credential envelope, once; an in-flight operation never reloads it.
     pub fn snapshot(&self) -> Result<OperationContext> {
+        self.snapshot_inner(None)
+    }
+    pub(crate) fn snapshot_traced(
+        &self,
+        trace: &crate::performance::OperationTrace,
+    ) -> Result<OperationContext> {
+        self.snapshot_inner(Some(trace))
+    }
+    fn snapshot_inner(
+        &self,
+        trace: Option<&crate::performance::OperationTrace>,
+    ) -> Result<OperationContext> {
+        if let Some(trace) = trace {
+            trace.mark("snapshot_mutex_wait");
+        }
         let _guard = self.inner.operation.lock().expect("settings lock");
-        if let Ok(key) = std::env::var("TOKEMULA_IMAGE_KEY") {
-            return Ok(OperationContext {
-                api_key: (!key.is_empty()).then_some(key),
-                preferences: None,
-                image_preferences: None,
-                source: CredentialSource::Environment,
-            });
+        if let Some(trace) = trace {
+            trace.mark("snapshot_mutex_acquired");
         }
-        if let Some(envelope) = self.envelope()? {
-            return Ok(OperationContext {
-                api_key: Some(envelope.api_key.clone()),
-                preferences: Some(envelope.preferences.clone()),
+        let result = (|| {
+            if let Ok(key) = std::env::var("TOKEMULA_IMAGE_KEY") {
+                return Ok(OperationContext {
+                    api_key: (!key.is_empty()).then_some(key),
+                    preferences: None,
+                    image_preferences: None,
+                    source: CredentialSource::Environment,
+                });
+            }
+            if let Some(envelope) = self.envelope()? {
+                return Ok(OperationContext {
+                    api_key: Some(envelope.api_key.clone()),
+                    preferences: Some(envelope.preferences.clone()),
+                    image_preferences: self.read_image_preferences()?,
+                    source: CredentialSource::SystemStore,
+                });
+            }
+            Ok(OperationContext {
+                api_key: None,
+                preferences: self.read_preferences()?,
                 image_preferences: self.read_image_preferences()?,
-                source: CredentialSource::SystemStore,
-            });
+                source: CredentialSource::None,
+            })
+        })();
+        if let Some(trace) = trace {
+            trace.mark("snapshot_storage_complete");
         }
-        Ok(OperationContext {
-            api_key: None,
-            preferences: self.read_preferences()?,
-            image_preferences: self.read_image_preferences()?,
-            source: CredentialSource::None,
-        })
+        result
     }
     pub fn status(&self) -> Result<SettingsStatus> {
         let context = self.snapshot()?;

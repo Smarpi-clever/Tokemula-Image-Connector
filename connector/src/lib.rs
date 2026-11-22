@@ -9,6 +9,7 @@ mod image_view;
 pub mod management;
 pub mod mcp;
 mod output;
+mod performance;
 pub mod release_package;
 pub mod settings;
 mod tasks;

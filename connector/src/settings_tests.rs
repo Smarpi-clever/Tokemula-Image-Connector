@@ -859,3 +859,33 @@ fn d4_export_old_format_compatibility_inputs() {
         .unwrap();
     }
 }
+
+#[test]
+fn traced_snapshot_keeps_storage_identity_and_order_without_secret_diagnostics() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(FaultStore::default());
+    let settings = service(directory.path(), store);
+    settings
+        .save(&validated(KEY_ONE), prefs("sample-26"))
+        .unwrap();
+    let trace = crate::performance::OperationTrace::new("synthetic");
+    let snapshot = settings.snapshot_traced(&trace).unwrap();
+    assert_eq!(snapshot.api_key.as_deref(), Some(KEY_ONE));
+    let events = trace.events();
+    let stages: Vec<_> = events
+        .iter()
+        .map(|event| event["stage"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        &stages[1..],
+        &[
+            "snapshot_mutex_wait",
+            "snapshot_mutex_acquired",
+            "snapshot_storage_complete"
+        ]
+    );
+    let visible = serde_json::to_string(&events).unwrap();
+    assert!(!visible.contains(KEY_ONE));
+    assert!(!visible.contains(directory.path().to_str().unwrap()));
+    trace.finish("success", crate::http::Submission::NotSubmitted, "ok");
+}
